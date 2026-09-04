@@ -1,47 +1,83 @@
-# AGENTS.local.md — NeuralInverse development (our ZCode project rules)
+# AGENTS.local.md — NeuralInverse development rules (OUR project rules)
 
-Fork of VS Code / Void. We develop here and PR to upstream.
-(The root `AGENTS.md` belongs to upstream VS Code — don't edit it.)
+Fork of VS Code / Void. We develop here, test live on the installed app, and
+PR to upstream ONLY after the owner's explicit approval.
+(The root `AGENTS.md` belongs to upstream VS Code — never edit it.)
 
-## Remotes
-- `origin` → aref-alapour/neuralinverse (our fork; PRs come from here)
+## Hard gates (never skip)
+
+1. **Approval gate:** completing work locally is NOT permission to publish.
+   Pushing to the fork, opening issues, or opening PRs on
+   NeuralInverse/neuralinverse requires the owner's explicit OK in chat
+   ("بفرست", "PR بزن", ...). Until then: commit locally, report, stop.
+2. **Live-test gate:** a fix is "done" only after the owner tested it on the
+   installed app (see Live testing). Source-only = not done.
+3. Never push to `upstream` directly. All upstream contributions go via
+   fork branches + PR. Never force-push shared branches.
+4. Never edit files outside our scope (below) without saying why first.
+5. Never print or commit secrets/keys. Persian in chat; issues/PRs/code in
+   English.
+
+## Remotes & branching
+
+- `origin` → aref-alapour/neuralinverse (fork; PRs come from here)
 - `upstream` → NeuralInverse/neuralinverse (source of truth)
+- Before new work: `git fetch upstream` and branch from the right base:
+  - fixes to files as they exist upstream → branch from `upstream/main`
+  - continuation of our unmerged work → branch from our feature branch
+- One concern per branch/PR. Reference the issue (`Fixes #N`).
+- Upstream PR branches must contain ONLY the code change — never our
+  local tooling (`tools/`, `AGENTS.local.md`, `PROMPT-SESSION.md`).
 
-## Workflow
-1. `git fetch upstream` before starting any branch.
-2. Branch from `upstream/main`: `git checkout -b <type>/<slug> upstream/main`.
-3. One concern per branch / PR. Reference the issue (`Fixes #N`).
-4. Rebase before pushing if upstream moved. Never push to upstream directly.
-5. PR body in English (maintainers' language); chat in Persian is fine.
+## Code scope
 
-## Code rules
-- Touch ONLY under `src/vs/workbench/contrib/neuralInverse` (and `contrib/void`
-  or `contrib/powerMode` when strictly related). Never modify core vscode paths.
-- `IAgentDefinition.id` is canonical; anything resolving agents keys by `id`
-  first, display-name aliases only for backward compatibility.
-- Match existing TS style in the file you edit; no reformat drives.
-- Sparse checkout is on: `git sparse-checkout add <path>` when more is needed.
+- Allowed by default: `src/vs/workbench/contrib/neuralInverse/**`
+- Allowed when justified: `src/vs/workbench/contrib/void/**`,
+  `src/vs/platform/update/**` (say why in the commit/PR)
+- Forbidden: core vscode paths, root `AGENTS.md`
+- `IAgentDefinition.id` is canonical; agent resolution keys by `id` first.
+- Match the file's existing TS style. No reformat drives. Sparse checkout:
+  `git sparse-checkout add <path>` when more of the repo is needed.
 
 ## Live testing (installed app)
-- Installed app: `C:\Program Files\NeuralInverse`
-- Bundle: `resources/app/out/vs/workbench/workbench.desktop.main.js` (minified,
-  ~24 MB). Write access needs admin elevation.
-- `tools/live-patch.py` applies our source-level fixes to that bundle so we can
-  test before a real build. It backs up the original once (`.orig`).
-- After an app auto-update the bundle is replaced → re-run the patch script.
-- To revert: restore the `.orig` backup.
+
+- Install: `C:\Program Files\NeuralInverse`
+- Bundles patched by `tools/live-patch.py`:
+  `out/vs/workbench/workbench.desktop.main.js` (renderer),
+  `out/main.js` (main process) + `product.json` (checksums dropped, version
+  stamped from their update API). Write access needs admin elevation.
+- After ANY app update: files are replaced → tell the owner to run the
+  desktop shortcut **"Repatch NeuralInverse.bat"**, then re-verify every
+  patch marker still applies; if a pattern went missing, update the script
+  for the new bundle BEFORE any new work.
+- To revert everything: `python tools/live-patch.py --revert` (admin).
+- Owner restarts the app to load patches. Known limitation of the
+  conversation-memory live patch: two agents running concurrently can mix
+  context (the source fix doesn't have this).
+
+## Session workflow (per task)
+
+1. State the task and the file(s) you expect to touch.
+2. Investigate source first (read before editing).
+3. Implement on source; commit locally with a clear message.
+4. Port to `tools/live-patch.py` (minified patterns), run elevated, verify
+   markers, ask the owner to restart + test.
+5. Iterate until the owner approves.
+6. Only then: clean branch → push to fork → issue/PR on upstream →
+   report links. If an issue already covers it, link instead of duplicating.
+
+## Upstream state (update as things merge)
+
+- #133 issue: agent resolution keyed by name not id (+ adhoc registration,
+  hydration race) — OPEN
+- #134 PR: id-keyed lookup maps — awaiting review
+- #135 issue: updater endless banner + fake download crash — OPEN
+- #136 PR: updater client-side version guard — awaiting review
+- Local, not yet PR'd: feat/agent-conversation-memory (conversation memory
+  + executor chatMode null). PR AFTER owner's live test passes.
+- Known upstream bugs not yet reported: none queued.
 
 ## Build (heavy — avoid unless needed)
-Full VS Code build: `npm i && gulp` in repo root. Hours + tens of GB on
-Windows. Prefer upstream CI for compile verification on PRs.
 
-## Current roadmap
-1. #133 Bug 3: register ad-hoc workflow in configLoader (dead primary path).
-2. #133 Bug 4: `whenReady` gate on AgentStoreService hydration race.
-3. Agent chat history/session persistence (root cause of "agent forgets"
-   loops — our doc-writer case).
-4. Design discussion upstream: multi-agent channels / team orchestration.
-
-## Open items
-- PR #134 (fix/agent-resolution-by-id) — awaiting review.
-- Issue #133 — bug report backing the PR.
+Full VS Code build (`npm i && gulp`): hours + tens of GB on Windows. Prefer
+upstream CI for compile verification on PRs.
