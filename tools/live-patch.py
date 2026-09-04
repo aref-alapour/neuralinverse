@@ -59,6 +59,66 @@ PATCHES = [
      "executor chatMode null: stop injecting Void/MCP tools into agent runs",
      'chatMode:"agent",onText',
      'chatMode:null,onText'),
+    # ── feat(agents): pre-send context pipeline + stream stability (task 2) ──
+    # 1. Chat loop: compact outgoing request before building LLM messages
+    #    (source: ChatThreadService._maybeCompactThreadForSend).
+    (BUNDLE,
+     "chat: compact thread before prepareLLMChatMessages",
+     'const k=this.state.allThreads[e]?.messages??[],{messages:I,separateSystemMessage:M}=await this._convertToLLMMessagesService.prepareLLMChatMessages({chatMessages:k,modelSelection:t,chatMode:c});',
+     'globalThis.__niOv=0;let k=await __niC.forSend(this._llmMessageService,this.state.allThreads[e]?.messages??[],t,e,!1),I,M;({messages:I,separateSystemMessage:M}=await this._convertToLLMMessagesService.prepareLLMChatMessages({chatMessages:k,modelSelection:t,chatMode:c}));'),
+    # 2. Chat loop LLM call, all in one replacement (the sendLLMMessage call
+    #    sits inside a const declarator chain, so the watchdog is armed via a
+    #    comma expression in q's initializer):
+    #    - arm a stall watchdog (3 min without any chunk => abort + clear
+    #      error instead of a forever-spinning thread),
+    #    - heartbeat on every streamed chunk,
+    #    - surface a clear error when the watchdog killed the stream,
+    #    - keep the 'no cancel token' error visible — the old `break` fell
+    #      through to the loop's final setStreamState, which overwrote it.
+    (BUNDLE,
+     "chat: stall watchdog + visible send error",
+     'q=this._llmMessageService.sendLLMMessage({messagesType:"chatMessages",chatMode:c,messages:I,modelSelection:t,modelSelectionOptions:n,overridesOfModel:d,mcpTools:Q,logging:{loggingName:`Chat - ${c}`,loggingExtras:{threadId:e,nMessagesSent:h,chatMode:c}},separateSystemMessage:M,onText:({fullText:_e,fullReasoning:te,toolCalls:ge})=>{this._setStreamState(e,{isRunning:"LLM",llmInfo:{displayContentSoFar:_e,reasoningSoFar:te,toolCallSoFar:ge?.[ge.length-1]??null},interrupt:Promise.resolve(()=>{q&&this._llmMessageService.abort(q)})})},onFinalMessage:async({fullText:_e,fullReasoning:te,toolCalls:ge,anthropicReasoning:pe})=>{B({type:"llmDone",toolCalls:ge,info:{fullText:_e,fullReasoning:te,anthropicReasoning:pe}})},onError:async _e=>{B({type:"llmError",error:_e})},onAbort:()=>{B({type:"llmAborted"}),this._metricsService.capture("Agent Loop Done (Aborted)",{nMessagesSent:h,chatMode:c,duration_ms:Date.now()-v})}});if(!q){this._setStreamState(e,{isRunning:void 0,error:{message:"There was an unexpected error when sending your chat message.",fullError:null}});break}',
+     'q=(globalThis.__niW=__niC.watchdog(18e4,()=>{globalThis.__niW.stalled=1,globalThis.__niWTok&&this._llmMessageService.abort(globalThis.__niWTok)}),this._llmMessageService.sendLLMMessage({messagesType:"chatMessages",chatMode:c,messages:I,modelSelection:t,modelSelectionOptions:n,overridesOfModel:d,mcpTools:Q,logging:{loggingName:`Chat - ${c}`,loggingExtras:{threadId:e,nMessagesSent:h,chatMode:c}},separateSystemMessage:M,onText:({fullText:_e,fullReasoning:te,toolCalls:ge})=>{globalThis.__niW&&globalThis.__niW.reset(),this._setStreamState(e,{isRunning:"LLM",llmInfo:{displayContentSoFar:_e,reasoningSoFar:te,toolCallSoFar:ge?.[ge.length-1]??null},interrupt:Promise.resolve(()=>{q&&this._llmMessageService.abort(q)})})},onFinalMessage:async({fullText:_e,fullReasoning:te,toolCalls:ge,anthropicReasoning:pe})=>{B({type:"llmDone",toolCalls:ge,info:{fullText:_e,fullReasoning:te,anthropicReasoning:pe}})},onError:async _e=>{B({type:"llmError",error:_e})},onAbort:()=>{B({type:"llmAborted"});globalThis.__niW&&globalThis.__niW.stalled&&(this._setStreamState(e,{isRunning:void 0,error:{message:"The model stopped sending data for over 3 minutes - the stream was closed. Try sending again, or switch models/endpoints.",fullError:null}}),this._addUserCheckpoint({threadId:e}));this._metricsService.capture("Agent Loop Done (Aborted)",{nMessagesSent:h,chatMode:c,duration_ms:Date.now()-v})}}));globalThis.__niWTok=q;if(!q){globalThis.__niW&&globalThis.__niW.dispose(),globalThis.__niW=void 0;this._setStreamState(e,{isRunning:void 0,error:{message:"There was an unexpected error when sending your chat message.",fullError:null}});this._addUserCheckpoint({threadId:e});return}'),
+    # 3. Chat loop: dispose the watchdog once the stream settles.
+    (BUNDLE,
+     "chat: dispose watchdog after await",
+     'const oe=await z;if(this.streamState[e]?.isRunning!=="LLM")return',
+     'let oe;try{oe=await z}finally{globalThis.__niW&&globalThis.__niW.dispose(),globalThis.__niW=void 0}if(this.streamState[e]?.isRunning!=="LLM")return'),
+    # 4. Chat loop: retry only transient errors; on context-overflow, compact
+    #    once and retry instead of resending the identical oversized payload.
+    (BUNDLE,
+     "chat: smart retry + overflow compaction recovery",
+     'if(O<EGs)if(P=!0,this._setStreamState(e,{isRunning:"idle",interrupt:a}),await ec(DGs),o){this._setStreamState(e,void 0);return}else continue;else{const{error:_e}=oe,',
+     'if(O<EGs&&__niC.isRetryable(oe.error&&oe.error.message))if(P=!0,this._setStreamState(e,{isRunning:"idle",interrupt:a}),await ec(DGs),o){this._setStreamState(e,void 0);return}else continue;else{if(__niC.isOverflow(oe.error&&oe.error.message)&&!globalThis.__niOv){globalThis.__niOv=1;try{k=await __niC.forSend(this._llmMessageService,this.state.allThreads[e]?.messages??[],t,e,!0),({messages:I,separateSystemMessage:M}=await this._convertToLLMMessagesService.prepareLLMChatMessages({chatMessages:k,modelSelection:t,chatMode:c}))}catch(_){}P=!0;continue}const{error:_e}=oe,'),
+    # 8. Renderer LLM service: an IPC rejection fired no hook at all (callers
+    #    awaited a promise that never resolved). Route it through onError.
+    (BUNDLE,
+     "llm-service: IPC rejection surfaces through onError",
+     '(async()=>{this.channel.call("sendLLMMessage",{...d,requestId:g,settingsOfProvider:h,modelSelection:a,mcpTools:p,remoteAuthority:this.environmentService.remoteAuthority})})()',
+     '(async()=>{try{this.channel.call("sendLLMMessage",{...d,requestId:g,settingsOfProvider:h,modelSelection:a,mcpTools:p,remoteAuthority:this.environmentService.remoteAuthority})}catch(_e){console.error("LLMMessageService: sendLLMMessage IPC call failed:",_e),this.llmMessageHooks.onError[g]?.({message:"Failed to send LLM message over IPC: "+_e,fullError:null,requestId:g}),this._clearChannelHooks(g)}})()'),
+    # 9. Renderer LLM service: the onAbort hook was never deleted (leak).
+    (BUNDLE,
+     "llm-service: clear onAbort hook",
+     '_clearChannelHooks(e){delete this.llmMessageHooks.onText[e],delete this.llmMessageHooks.onFinalMessage[e],delete this.llmMessageHooks.onError[e],',
+     '_clearChannelHooks(e){delete this.llmMessageHooks.onAbort[e],delete this.llmMessageHooks.onText[e],delete this.llmMessageHooks.onFinalMessage[e],delete this.llmMessageHooks.onError[e],'),
+    # 10. Context fitting: reserve 1/4 (not 1/2) of the window for output —
+    #     half the usable input was being thrown away before trimming started.
+    (BUNDLE,
+     "ctx-fit: reserve 1/4 of window for output",
+     'c=Math.max(a*1/2,c??4096)',
+     'c=Math.max(a*1/4,c??4096)'),
+    # 11. Executor: cap each tool result before it enters the history.
+    (BUNDLE,
+     "executor: cap tool results fed back into history",
+     '{role:"user",content:E.join(`\n\n`)}',
+     '{role:"user",content:E.map(__niC.capToolResult).join(`\n\n`)}'),
+    # 12. Executor: provider-aware request formatting (Anthropic/Bedrock/Gemini
+    #     reject a system role inside messages; Gemini needs parts-format),
+    #     pre-call history compaction, and a stall watchdog on the LLM call.
+    (BUNDLE,
+     "executor: provider-format fix + history compaction + stall watchdog",
+     '_callLLM(i,e){return new Promise((t,n)=>{const s=this._modelSelection??this.settingsService.state.modelSelectionOfFeature.Chat;if(!s){n(new Error("No model selected. Configure a model in Void settings or set one on the agent."));return}this.llmService.sendLLMMessage({messagesType:"chatMessages",messages:i,modelSelection:s,modelSelectionOptions:void 0,overridesOfModel:void 0,separateSystemMessage:void 0,chatMode:null,onText:()=>{},onFinalMessage:o=>t(o.fullText),onError:o=>n(new Error(o.message||o.fullError?.message||"LLM error")),onAbort:()=>n(new Error("LLM call aborted")),logging:{loggingName:"WorkflowAgent"},allowedToolNames:[]})})}',
+     '_callLLM(i,e){return(async()=>{const s=this._modelSelection??this.settingsService.state.modelSelectionOfFeature.Chat;if(!s)throw new Error("No model selected. Configure a model in Void settings or set one on the agent.");await __niC.execCompact(this.llmService,i,s);var _ps=__niC.providerSplit(i,s.providerName),_w=__niC.watchdog(18e4,()=>{_w.stalled=1,_w.tok&&this.llmService.abort(_w.tok)});return new Promise((t,n)=>{var _tok=this.llmService.sendLLMMessage({messagesType:"chatMessages",messages:_ps.messages,modelSelection:s,modelSelectionOptions:void 0,overridesOfModel:void 0,separateSystemMessage:_ps.system,chatMode:null,onText:()=>{_w.reset()},onFinalMessage:o=>{_w.dispose(),t(o.fullText)},onError:o=>{_w.dispose(),n(new Error(o.message||o.fullError?.message||"LLM error"))},onAbort:()=>{_w.dispose(),n(new Error(_w.stalled?"LLM stream stalled - no data received for over 3 minutes":"LLM call aborted"))},logging:{loggingName:"WorkflowAgent"},allowedToolNames:[]});_w.tok=_tok})})()}'),
     # ── fix(updater): endless update banner (server ignores commit) ─────────
     # Their update API returns the latest release for ANY commit hash, so the
     # client offers (and re-offers forever) the already-installed version.
@@ -68,6 +128,103 @@ PATCHES = [
      "updater: skip update whose version matches installed version",
      'return!i||!i.url||!i.version||!i.productVersion?(this.setState(_e.Idle(s)),Promise.resolve(null)):s===1?(',
      'return!i||!i.url||!i.version||!i.productVersion||i.version===this.productService.version?(this.setState(_e.Idle(s)),Promise.resolve(null)):s===1?('),
+]
+
+# Injected runtime module: the ConversationCompactor port (opencode-style
+# pre-send context management), exposed as globalThis.__niC. Prepend once,
+# idempotently, to the renderer bundle.
+COMPACTOR_JS = r""";(function(){
+"use strict";
+var CH=4,OVH=8,MINMSG=8,THR=.72,MINTAIL=8,SYSRES=10000;
+function est(s){return Math.ceil((s||"").length/CH)+OVH}
+function estAll(a){var t=0;for(var i=0;i<a.length;i++)t+=est(a[i].content);return t}
+function watchdog(ms,fn){var t=null,d=false;function arm(){if(d)return;if(t!==null)clearTimeout(t);t=setTimeout(function(){if(!d)fn()},ms)}arm();return{reset:arm,dispose:function(){d=true;if(t!==null)clearTimeout(t)}}}
+function isOverflow(m){if(!m)return false;return /context length|context window|context_length|exceeds?\s+(the\s+)?(maximum\s+)?(context|tokens|input)|maximum.*tokens?|too many tokens|prompt is too long|input.*too long|reduce the length|input_length|MAX_TOKENS/i.test(m)}
+function isRetryable(m){if(!m)return false;return /\b429\b|rate.?limit|overloaded|quota|timeout|timed out|fetch failed|network|econnreset|econnrefused|enotfound|socket hang up|\b50[0-4]\b|service unavailable|internal server|temporarily/i.test(m)}
+function capToolResult(s,max){max=max||24000;s=s||"";if(s.length<=max)return s;var h=Math.floor(max*.7),t=Math.floor(max*.2);return s.slice(0,h)+"\n...[output truncated: "+s.length+" chars total]...\n"+s.slice(-t)}
+function renderSum(s){return "<conversation_summary>\n"+s+"\n</conversation_summary>\n\n(Earlier conversation was summarized above to free context. Continue assisting the user; the most recent messages follow.)"}
+function ctxWin(ms){if(!ms)return 131072;var m=(ms.modelName||"").toLowerCase(),p=(ms.providerName||"").toLowerCase();if(p==="gemini")return 1048576;if(p==="anthropic"||/claude/.test(m))return 200000;if(/gpt-4\.1|gpt-5/.test(m))return 1048576;if(/gpt-4o|o1|o3|o4/.test(m))return 128000;return 131072}
+function avail(cw){return Math.max(cw-Math.max(Math.floor(cw/4),4096)-SYSRES,4000)}
+function renderLine(m){var tag=m.role==="tool"?"TOOL("+(m.name||"unknown")+")":m.role.toUpperCase();var c=m.content||"";if(c.length>20000)c=c.slice(0,10000)+"\n...["+(c.length-14000)+" chars omitted]...\n"+c.slice(-4000);return "[["+tag+"]]\n"+c}
+function fingerprint(m){if(!m)return"";return m.role+":"+(m.content||"").length+":"+(m.content||"").slice(-64)}
+function findBoundary(a){var minKeep=Math.min(MINTAIL,Math.max(1,Math.floor(a.length/2))),i,found=-1,start=Math.max(1,a.length-MINTAIL-4);for(i=start;i<a.length-2;i++)if(a[i].role==="user"&&a.length-i>=minKeep){found=i;break}if(found<0)for(i=1;i<a.length-minKeep;i++)if(a[i].role==="user"){found=i;break}return found}
+function fitBoundary(a,idx,cw){var budget=avail(cw);while(idx>1){var tail=estAll(a.slice(idx));if(tail+3000<=budget)break;var next=-1;for(var i=idx-1;i>=1;i--)if(a[i].role==="user"){next=i;break}if(next<=0)break;idx=next}return idx}
+function textOf(m){if(m.parts){var c="";for(var j=0;j<m.parts.length;j++)if(m.parts[j]&&typeof m.parts[j].text==="string")c+=m.parts[j].text;return c}if(typeof m.content==="string")return m.content;if(Array.isArray(m.content)){var c2="";for(var k=0;k<m.content.length;k++)if(m.content[k]&&typeof m.content[k].text==="string")c2+=m.content[k].text;return c2}return""}
+function summarize(llm,prior,msgs,ms){
+  if(msgs.length===0)return Promise.resolve(prior||"");
+  if(!ms)return Promise.reject(new Error("no model"));
+  var sys=["You are a precise conversation summarizer for a coding assistant.","Your summary will REPLACE the older messages as the only memory of them, so the assistant must be able to continue working from it without loss.","Write a dense, factual summary in structured markdown with exactly these sections:","## Objective - what the user wants to achieve.","## Requirements & Constraints - explicit rules the user stated.","## Key Decisions - decisions made so far and why.","## Files & Artifacts - every file path, symbol, branch, command, API or config value that was read, created or modified, with its important values.","## Tool Activity - tool/terminal results that affect the state of work (errors and how they were resolved).","## Current State - what is done, what is in progress, what is verified.","## Next Steps - the immediate actions the assistant was about to take.","Rules: never invent facts; never drop identifiers; prefer bullet lists; no pleasantries."].join("\n");
+  var transcript="";for(var i=0;i<msgs.length;i++)transcript+=renderLine(msgs[i])+"\n";
+  var usr=(prior?"<previous_summary>\n"+prior+"\n</previous_summary>\n":"")+"\nTranscript to summarize (oldest first):\n"+transcript;
+  var pn=ms.providerName,req,sep;
+  if(pn==="gemini"){req=[{role:"user",parts:[{text:usr}]}];sep=sys}
+  else if(pn==="anthropic"||pn==="awsBedrock"){req=[{role:"user",content:usr}];sep=sys}
+  else{req=[{role:"system",content:sys},{role:"user",content:usr}];sep=undefined}
+  return new Promise(function(res,rej){
+    var done=false,wd=watchdog(45000,function(){if(!done){done=true;rej(new Error("summarize stalled"))}});
+    var ov=setTimeout(function(){if(!done){done=true;wd.dispose();rej(new Error("summarize timeout"))}},90000);
+    function fin(f){if(done)return;done=true;clearTimeout(ov);wd.dispose();f()}
+    llm.sendLLMMessage({messagesType:"chatMessages",chatMode:null,allowedToolNames:[],messages:req,modelSelection:ms,modelSelectionOptions:undefined,overridesOfModel:undefined,separateSystemMessage:sep,logging:{loggingName:"ConversationCompactor"},onText:function(){wd.reset()},onFinalMessage:function(p){fin(function(){var t=(p.fullText||"").trim();if(!t)rej(new Error("empty summary"));else res(t)})},onError:function(p){fin(function(){rej(new Error(p.message||"summarize failed"))})},onAbort:function(){fin(function(){rej(new Error("summarize aborted"))})}})
+  })
+}
+function compact(llm,msgs,cw,ms,cacheKey,force){
+  var available=avail(cw),before=estAll(msgs);
+  if(msgs.length<MINMSG&&!force)return Promise.resolve(null);
+  if(!force&&before<=Math.floor(available*THR))return Promise.resolve(null);
+  var idx=findBoundary(msgs);if(idx<=0)return Promise.resolve(null);
+  idx=fitBoundary(msgs,idx,cw);
+  var prefix=msgs.slice(0,idx);if(prefix.length===0)return Promise.resolve(null);
+  var cache=globalThis.__niCC=globalThis.__niCC||new Map(),entry=cacheKey?cache.get(cacheKey):null;
+  if(entry&&(entry.n>msgs.length||fingerprint(msgs[entry.n-1])!==entry.fp)){cache.delete(cacheKey);entry=null}
+  var covered=entry?Math.min(entry.n,prefix.length):0;
+  return summarize(llm,entry?entry.summary:undefined,prefix.slice(covered),ms).then(function(sum){
+    if(cacheKey)cache.set(cacheKey,{n:idx,fp:fingerprint(msgs[idx-1]),summary:sum});
+    return{keepFromIdx:idx,summary:sum,usedLLM:true,before:before,after:est(sum)+estAll(msgs.slice(idx))}
+  },function(){
+    var fp=prefix.map(function(m){var c=m.content||"";if(c.length>2000)c=c.slice(0,1200)+"\n...[truncated "+(c.length-1600)+" chars]...\n"+c.slice(-400);return{role:m.role,content:c,name:m.name}});
+    var s="(Deterministic compaction - the LLM summarizer was unavailable. Older messages were truncated, not summarized.)\n\n"+fp.map(renderLine).join("\n");
+    return{keepFromIdx:idx,summary:s,usedLLM:false,before:before,after:est(s)+estAll(msgs.slice(idx))}
+  })
+}
+function toCompactables(raw){
+  var cs=[],rs=[];
+  for(var i=0;i<raw.length;i++){var m=raw[i];
+    if(m.role==="checkpoint"||m.role==="interrupted_streaming_tool")continue;
+    if(m.role==="assistant"){cs.push({role:"assistant",content:((m.displayContent||"").replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g,"")).trim()});rs.push(m)}
+    else if(m.role==="tool"){cs.push({role:"tool",content:m.content||"",name:m.name});rs.push(m)}
+    else if(m.role==="user"){cs.push({role:"user",content:m.content||""});rs.push(m)}}
+  return{cs:cs,rs:rs}}
+function forSend(llm,raw,ms,threadId,force){
+  if(!ms||!raw||raw.length===0)return Promise.resolve(raw);
+  var t=toCompactables(raw);if(t.cs.length===0)return Promise.resolve(raw);
+  return compact(llm,t.cs,ctxWin(ms),ms,threadId,force).then(function(r){
+    if(!r||!r.summary||r.keepFromIdx<=0)return raw;
+    console.log("[ChatThread] compacted context for send: ~"+r.before+" -> ~"+r.after+" est tokens (llm summary: "+r.usedLLM+")");
+    return[{role:"user",content:renderSum(r.summary)}].concat(t.rs.slice(r.keepFromIdx))
+  },function(){return raw})}
+function execCompact(llm,history,ms){
+  if(!ms||history.length<8)return Promise.resolve();
+  var cs=[];for(var i=1;i<history.length;i++){var m=history[i];cs.push({role:m.role==="assistant"?"assistant":"user",content:textOf(m)})}
+  return compact(llm,cs,ctxWin(ms),ms,null,false).then(function(r){
+    if(!r||!r.summary||r.keepFromIdx<=0)return;
+    console.log("[AgentExecutor] compacted history: ~"+r.before+" -> ~"+r.after+" est tokens");
+    var sysm=history[0],kept=history.slice(1+r.keepFromIdx);
+    history.length=0;history.push(sysm,{role:"user",content:renderSum(r.summary)});
+    for(var i=0;i<kept.length;i++)history.push(kept[i])
+  },function(){})}
+function providerSplit(messages,pn){
+  var out=[],sys;
+  for(var i=0;i<messages.length;i++){var m=messages[i];
+    if(i===0&&m.role==="system"&&typeof m.content==="string"&&(pn==="anthropic"||pn==="awsBedrock"||pn==="gemini")){sys=m.content;continue}
+    if(pn==="gemini")out.push({role:m.role==="assistant"?"model":"user",parts:[{text:textOf(m)}]});
+    else out.push(m)}
+  return{messages:out,system:sys}}
+globalThis.__niC={est:est,watchdog:watchdog,isOverflow:isOverflow,isRetryable:isRetryable,capToolResult:capToolResult,forSend:forSend,execCompact:execCompact,providerSplit:providerSplit};
+})();"""
+
+# (file, name, code) prepended idempotently before PATCHES are applied.
+PREPENDS = [
+    (BUNDLE, "conversation-compactor runtime module (globalThis.__niC)", COMPACTOR_JS),
 ]
 
 
@@ -125,7 +282,7 @@ def main() -> int:
                 print(f"Reverted {f.name}")
         return 0
 
-    files = {p[0] for p in PATCHES}
+    files = {p[0] for p in PATCHES} | {p[0] for p in PREPENDS}
     for f in files:
         if not f.exists():
             print(f"ERROR: file not found: {f}")
@@ -133,6 +290,15 @@ def main() -> int:
         backup_once(f)
 
     patch_product_json()
+
+    # Injected runtime modules first (patches below reference them).
+    for f, name, code in PREPENDS:
+        data = f.read_text(encoding="utf-8")
+        if "globalThis.__niC=" in data:
+            print(f"SKIP  {name}: already injected")
+            continue
+        f.write_text(code + "\n" + data, encoding="utf-8", newline="")
+        print(f"OK    {name}: injected ({len(code)} chars)")
 
     for f, name, old, new in PATCHES:
         data = f.read_text(encoding="utf-8")
