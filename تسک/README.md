@@ -90,6 +90,24 @@ compaction ای که از نظر الگوریتم جلوتر است.
 22. **F6** سخت‌سازی ترمینال (POSIX/nul/clamp) + کانال XML-in-stream
 23. **F7** eval harness (پورت BuffBench با داور دوگانه و runner رقبا)
 
+### دسته‌ی ۷ — پورت‌های موتور گراف ComfyUI (Track A: engine، Track B: embed)
+> کاتالوگ + اصلاحات handoff + قواعد provenance: [`07-comfyui/README.md`](07-comfyui/README.md).
+> ممیزی Wave 0 انجام شده (پیشنهاد: side-by-side + adapter). کل `workflow-engine/`
+> به‌دلیل منشأ GPL-3.0 **fork-only** است و هرگز وارد PR های upstream نمی‌شود.
+24. **G0** تصمیم extend-vs-replace + اسکلت `workflow-engine/` + PORTED-FROM.md
+25. **G1** فرمت گراف + DynamicGraph (ephemeral با پیشوند deterministic)
+26. **G2** موتور validation با NodeErrors ساخت‌یافته (تاکسونومی کامل ۱۴ رشته‌ای)
+27. **G3** اجرای توپولوژیک + re-staging واحد (lazy/async/subgraph از یک مسیر)
+28. **G4** قرارداد نود تایپ‌شده + adapter «Agent Step» روی agentExecutor فعلی
+29. **G5** کش با signature اجدادی + اجرای مجدد جزئی (دموی اصلی — بیعت سرمایه‌ای این پورت)
+30. **G6** صف/interrupt اتمیک + پروتکل رویداد کامل + progress
+31. **G7** nodeInfo به‌عنوان منبع واحد schema پالت + combo های فایل‌سیستمی
+32. **G8** اختیاری‌ها: jobs، history، node-replacement، نود API با قیمت زنده، بهداشت secret
+33. **G9** (Track B، مستقل) اجرای خود ComfyUI به‌عنوان سرویس لوکال برای تولید تصویر
+
+**قاعده‌ی پورت ComfyUI:** هدر provenance + `PORTED-FROM.md` + commit مبنا؛ کل
+`workflow-engine/` fork-only (GPL). قبل از پورت هر ماژول، لاگ upstream چک شود.
+
 **قانون پورت freebuff:** فقط کپی/تطبیق با attribution (هدر + `ThirdPartyNotices.txt`)،
 هرگز dependency؛ منطق، نه import (Bun/Zod با layering ما نمی‌خواند). درس معماری:
 loop ساده پیش‌فرض (base3)، sub-agent فقط opt-in.

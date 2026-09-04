@@ -35,6 +35,10 @@ PR to upstream ONLY after the owner's explicit approval.
 - Allowed when justified: `src/vs/workbench/contrib/void/**`,
   `src/vs/platform/update/**` (say why in the commit/PR)
 - Forbidden: core vscode paths, root `AGENTS.md`
+- GPL containment: `workflow-engine/` (ported from ComfyUI, GPL-3.0 — see
+  `تسک/07-comfyui/`) is fork-only. NEVER include it, its exports, or its code
+  in upstream PRs (upstream is Apache-2.0). Provenance headers + PORTED-FROM.md
+  are mandatory in every ported file.
 - `IAgentDefinition.id` is canonical; agent resolution keys by `id` first.
 - Match the file's existing TS style. No reformat drives. Sparse checkout:
   `git sparse-checkout add <path>` when more of the repo is needed.
