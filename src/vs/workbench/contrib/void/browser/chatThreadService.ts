@@ -47,6 +47,8 @@ import { needsOSSEnhancement } from '../common/ossModelEnhancement/ossDetection.
 import { shouldAutoRetry, getCorrectionMessage } from '../common/ossModelEnhancement/autoRetryCorrection.js';
 import { wrapToolResultForOSS } from '../common/ossModelEnhancement/progressFeedbackLoop.js';
 import { workspaceFilteredThreads } from '../common/chatThreadUtils.js';
+import { getModelCapabilities } from '../common/modelCapabilities.js';
+import { CompactableMessage, ConversationCompactor, createInactivityWatchdog, isContextOverflowError, isRetryableLlmError, renderConversationSummaryMessage } from './conversationCompactor.js';
 
 
 // Tool name aliases: OSS models use alternative names for built-in tools
@@ -83,6 +85,10 @@ function resolveToolAlias(name: string): string {
 // related to retrying when LLM message has error
 const CHAT_RETRIES = 3
 const RETRY_DELAY = 2500
+
+// A provider stream that emits no chunks for this long is treated as dead and
+// aborted — without this a stalled connection leaves the thread spinning forever.
+const LLM_STREAM_STALL_MS = 180_000 // 3 minutes
 
 
 const findStagingSelectionIndex = (currentSelections: StagingSelectionItem[] | undefined, newSelection: StagingSelectionItem): number | null => {
@@ -191,6 +197,14 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		return this._agentService
 	}
 
+	// Pre-send context compaction (opencode-style). Lazy because it needs the
+	// constructor-injected _llmMessageService.
+	private _compactor: ConversationCompactor | undefined
+	private _getCompactor(): ConversationCompactor {
+		if (!this._compactor) this._compactor = new ConversationCompactor(this._llmMessageService)
+		return this._compactor
+	}
+
 	constructor(
 		@IStorageService private readonly _storageService: IStorageService,
 		@IVoidModelService private readonly _voidModelService: IVoidModelService,
@@ -297,8 +311,127 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		return Math.ceil(text.length / 4);
 	}
 
-	async compactThread(_threadId: string): Promise<{ summary: string; messageCountBefore: number; messageCountAfter: number } | null> {
-		return null;
+	/**
+	 * Manual compaction (opencode-style): summarize the aged prefix of a thread
+	 * and REWRITE the stored thread, replacing the old messages with a single
+	 * summary message. The UI history shrinks accordingly.
+	 */
+	async compactThread(threadId: string): Promise<{ summary: string; messageCountBefore: number; messageCountAfter: number } | null> {
+		const thread = this.state.allThreads[threadId]
+		if (!thread) return null
+
+		const { modelSelection } = this._currentModelSelectionProps()
+		const rawMessages = thread.messages
+		const messageCountBefore = rawMessages.length
+
+		const { compactables, raws } = this._toCompactables(rawMessages)
+		if (compactables.length === 0 || !modelSelection) return null
+
+		const { overridesOfModel } = this._settingsService.state
+		const { contextWindow } = getModelCapabilities(modelSelection.providerName, modelSelection.modelName, overridesOfModel)
+
+		let result
+		try {
+			result = await this._getCompactor().compactIfNeeded({
+				messages: compactables,
+				contextWindow,
+				modelSelection,
+				cacheKey: threadId,
+				force: true,
+			})
+		} catch {
+			return null
+		}
+		if (!result.summary || result.keepFromIdx <= 0) return null
+
+		const summaryMessage: ChatMessage = {
+			role: 'user',
+			content: renderConversationSummaryMessage(result.summary),
+			displayContent: '📦 Conversation compacted — earlier messages were summarized to free up context.',
+			selections: null,
+			state: defaultMessageState,
+		}
+		this._replaceThreadMessages(threadId, [summaryMessage, ...raws.slice(result.keepFromIdx)])
+		return { summary: result.summary, messageCountBefore, messageCountAfter: 1 + (raws.length - result.keepFromIdx) }
+	}
+
+	/**
+	 * Pre-send context management: when the thread's estimated tokens approach
+	 * the model's context window, fold its aged prefix into one LLM-summarized
+	 * user message. The stored thread (and the UI) are untouched — only the
+	 * outgoing request is compacted.
+	 */
+	private async _maybeCompactThreadForSend(threadId: string, rawMessages: ChatMessage[], modelSelection: ModelSelection | null, force: boolean): Promise<ChatMessage[]> {
+		if (!modelSelection || rawMessages.length === 0) return rawMessages
+
+		const { compactables, raws } = this._toCompactables(rawMessages)
+		if (compactables.length === 0) return rawMessages
+
+		const { overridesOfModel } = this._settingsService.state
+		const { contextWindow } = getModelCapabilities(modelSelection.providerName, modelSelection.modelName, overridesOfModel)
+
+		let result
+		try {
+			result = await this._getCompactor().compactIfNeeded({
+				messages: compactables,
+				contextWindow,
+				modelSelection,
+				cacheKey: threadId,
+				force,
+			})
+		} catch {
+			return rawMessages // compaction is best-effort; never block the send
+		}
+
+		if (!result.summary || result.keepFromIdx <= 0) return rawMessages
+		console.log(`[ChatThread] Compacted context for send: ~${result.tokensBefore} → ~${result.tokensAfter} est. tokens (llm summary: ${result.usedLLM})`)
+
+		const summaryMessage: ChatMessage = {
+			role: 'user',
+			content: renderConversationSummaryMessage(result.summary),
+			displayContent: '',
+			selections: null,
+			state: defaultMessageState,
+		}
+		return [summaryMessage, ...raws.slice(result.keepFromIdx)]
+	}
+
+	/** Convert stored ChatMessages to the compactor's minimal shape, keeping a parallel array of the originals. */
+	private _toCompactables(rawMessages: ChatMessage[]): { compactables: CompactableMessage[], raws: ChatMessage[] } {
+		const compactables: CompactableMessage[] = []
+		const raws: ChatMessage[] = []
+		for (const m of rawMessages) {
+			if (m.role === 'checkpoint') continue
+			if (m.role === 'interrupted_streaming_tool') continue
+			if (m.role === 'assistant') {
+				compactables.push({ role: 'assistant', content: (m.displayContent || '').replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim() })
+				raws.push(m)
+			}
+			else if (m.role === 'tool') {
+				compactables.push({ role: 'tool', content: m.content ?? '', name: m.name })
+				raws.push(m)
+			}
+			else if (m.role === 'user') {
+				compactables.push({ role: 'user', content: m.content ?? '' })
+				raws.push(m)
+			}
+		}
+		return { compactables, raws }
+	}
+
+	private _replaceThreadMessages(threadId: string, messages: ChatMessage[]) {
+		const oldThread = this._allThreads[threadId]
+		if (!oldThread) return // should never happen
+		const newThreads = {
+			...this._allThreads,
+			[oldThread.id]: {
+				...oldThread,
+				lastModified: new Date().toISOString(),
+				messages,
+			},
+		}
+		this._storeAllThreads(newThreads)
+		this._setState({ allThreads: newThreads })
 	}
 
 
@@ -726,6 +859,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		let _failedBashCommands: string[] = [] // track failed bash commands to detect retry loops
 		let _consecutiveNoProgressRounds = 0 // track rounds where all tool calls fail (no forward progress)
 		let _sameToolNameAttempts: Record<string, number> = {} // track repeated calls to same tool name
+		let _didOverflowRecovery = false // one context-overflow compaction per agent run
 
 		// before enter loop, call tool
 		if (callThisToolFirst) {
@@ -754,12 +888,19 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 			this._setStreamState(threadId, { isRunning: 'idle', interrupt: idleInterruptor })
 
-			const chatMessages = this.state.allThreads[threadId]?.messages ?? []
-			const { messages, separateSystemMessage } = await this._convertToLLMMessagesService.prepareLLMChatMessages({
-				chatMessages,
-				modelSelection,
-				chatMode
-			})
+			// Builds the outgoing request. Includes pre-send context compaction
+			// (opencode-style): when the thread approaches the model's context
+			// window, its aged prefix is folded into one summarized user message.
+			const buildMessages = async (forceCompaction: boolean) => {
+				const chatMessagesRaw = this.state.allThreads[threadId]?.messages ?? []
+				const chatMessages = await this._maybeCompactThreadForSend(threadId, chatMessagesRaw, modelSelection, forceCompaction)
+				return await this._convertToLLMMessagesService.prepareLLMChatMessages({
+					chatMessages,
+					modelSelection,
+					chatMode
+				})
+			}
+			let { messages, separateSystemMessage } = await buildMessages(false)
 
 			if (interruptedWhenIdle) {
 				this._setStreamState(threadId, undefined)
@@ -813,7 +954,15 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 					return merged.slice(0, 128); // API hard limit
 				})();
 
-				const llmCancelToken = this._llmMessageService.sendLLMMessage({
+				let llmCancelToken: string | null = null
+				let llmStalled = false
+				// Abort a stream that stops emitting chunks entirely (dead connection),
+				// so the thread can never hang in the 'LLM' state forever.
+				const stallWatchdog = createInactivityWatchdog(LLM_STREAM_STALL_MS, () => {
+					llmStalled = true
+					if (llmCancelToken) this._llmMessageService.abort(llmCancelToken)
+				})
+				llmCancelToken = this._llmMessageService.sendLLMMessage({
 					messagesType: 'chatMessages',
 					chatMode,
 					messages: messages,
@@ -824,6 +973,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 					logging: { loggingName: `Chat - ${chatMode}`, loggingExtras: { threadId, nMessagesSent, chatMode } },
 					separateSystemMessage: separateSystemMessage,
 					onText: ({ fullText, fullReasoning, toolCalls }) => {
+						stallWatchdog.reset()
 						this._setStreamState(threadId, { isRunning: 'LLM', llmInfo: { displayContentSoFar: fullText, reasoningSoFar: fullReasoning, toolCallSoFar: toolCalls?.[toolCalls.length - 1] ?? null }, interrupt: Promise.resolve(() => { if (llmCancelToken) this._llmMessageService.abort(llmCancelToken) }) })
 					},
 					onFinalMessage: async ({ fullText, fullReasoning, toolCalls, anthropicReasoning, }) => {
@@ -833,7 +983,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 						resMessageIsDonePromise({ type: 'llmError', error: error })
 					},
 					onAbort: () => {
-						// stop the loop to free up the promise, but don't modify state (already handled by whatever stopped it)
+						// stop the loop to free up promise, but don't modify state (already handled by whatever stopped it)
 						resMessageIsDonePromise({ type: 'llmAborted' })
 						this._metricsService.capture('Agent Loop Done (Aborted)', { nMessagesSent, chatMode, duration_ms: Date.now() - _loopStartMs })
 					},
@@ -841,12 +991,22 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 				// mark as streaming
 				if (!llmCancelToken) {
+					stallWatchdog.dispose()
+					// Returning (not `break`) is important: the fall-through
+					// `_setStreamState({ isRunning: isRunningWhenEnd })` at the end of the
+					// loop would otherwise overwrite this error and hide it from the user.
 					this._setStreamState(threadId, { isRunning: undefined, error: { message: 'There was an unexpected error when sending your chat message.', fullError: null } })
-					break
+					this._addUserCheckpoint({ threadId })
+					return
 				}
 
 				this._setStreamState(threadId, { isRunning: 'LLM', llmInfo: { displayContentSoFar: '', reasoningSoFar: '', toolCallSoFar: null }, interrupt: Promise.resolve(() => this._llmMessageService.abort(llmCancelToken)) })
-				const llmRes = await messageIsDonePromise // wait for message to complete
+				let llmRes: ResTypes
+				try {
+					llmRes = await messageIsDonePromise // wait for message to complete
+				} finally {
+					stallWatchdog.dispose()
+				}
 
 				// if something else started running in the meantime
 				if (this.streamState[threadId]?.isRunning !== 'LLM') {
@@ -857,12 +1017,37 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 				// llm res aborted
 				if (llmRes.type === 'llmAborted') {
 					this._setStreamState(threadId, undefined)
+					if (llmStalled) {
+						this._setStreamState(threadId, { isRunning: undefined, error: { message: `The model stopped sending data for over ${Math.round(LLM_STREAM_STALL_MS / 60_000)} minutes — the stream was closed. Try sending again, or switch models/endpoints.`, fullError: null } })
+						this._addUserCheckpoint({ threadId })
+					}
 					return
 				}
 				// llm res error
 				else if (llmRes.type === 'llmError') {
-					// error, should retry
-					if (nAttempts < CHAT_RETRIES) {
+					const errorMessage = llmRes.error?.message ?? ''
+
+					// Context-window overflow: instead of blindly resending the same
+					// oversized payload, compact the thread once and retry immediately.
+					if (isContextOverflowError(errorMessage) && !_didOverflowRecovery) {
+						_didOverflowRecovery = true
+						this._setStreamState(threadId, { isRunning: 'idle', interrupt: idleInterruptor })
+						try {
+							;({ messages, separateSystemMessage } = await buildMessages(true))
+						} catch {
+							// fall through to the normal error paths below
+						}
+						if (interruptedWhenIdle) {
+							this._setStreamState(threadId, undefined)
+							return
+						}
+						shouldRetryLLM = true
+						continue
+					}
+
+					// error, should retry — only transient errors are worth retrying;
+					// auth/validation failures fail fast instead of burning 3 × 2.5s
+					if (nAttempts < CHAT_RETRIES && isRetryableLlmError(errorMessage)) {
 						shouldRetryLLM = true
 						this._setStreamState(threadId, { isRunning: 'idle', interrupt: idleInterruptor })
 						await timeout(RETRY_DELAY)
@@ -873,10 +1058,11 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 						else
 							continue // retry
 					}
-					// error, but too many attempts
+					// error, non-retryable or too many attempts
 					else {
 						const { error } = llmRes
-						const { displayContentSoFar, reasoningSoFar, toolCallSoFar } = this.streamState[threadId].llmInfo
+						const llmInfo = this.streamState[threadId]?.llmInfo ?? { displayContentSoFar: '', reasoningSoFar: '', toolCallSoFar: null }
+						const { displayContentSoFar, reasoningSoFar, toolCallSoFar } = llmInfo
 						this._addMessageToThread(threadId, { role: 'assistant', displayContent: displayContentSoFar, reasoning: reasoningSoFar, anthropicReasoning: null })
 						if (toolCallSoFar && toolCallSoFar.name && toolCallSoFar.name !== 'tool_call') this._addMessageToThread(threadId, { role: 'interrupted_streaming_tool', name: toolCallSoFar.name, mcpServerName: this._computeMCPServerOfToolName(toolCallSoFar.name) })
 

@@ -29,6 +29,8 @@ import { ILLMMessageService } from '../../../void/common/sendLLMMessageService.j
 import { IVoidSettingsService } from '../../../void/common/voidSettingsService.js';
 import { ModelSelection } from '../../../void/common/voidSettingsTypes.js';
 import { LLMChatMessage } from '../../../void/common/sendLLMMessageTypes.js';
+import { getModelCapabilities } from '../../../void/common/modelCapabilities.js';
+import { CompactableMessage, ConversationCompactor, capToolResultForHistory, createInactivityWatchdog, renderConversationSummaryMessage } from '../../../void/browser/conversationCompactor.js';
 import { IAgentDefinition, IWorkflowStep, IStepRun, IToolCallRecord, IToolExecutionContext, IStepToolCacheConfig } from '../../common/workflowTypes.js';
 import { ScopedToolRegistry } from '../tools/toolRegistry.js';
 import { parseToolCalls, stripToolCallBlocks } from './toolCallParser.js';
@@ -37,6 +39,9 @@ import { ToolResultCache } from './toolCache.js';
 import { BudgetTracker } from './budgetTracker.js';
 
 const DEFAULT_MAX_ITERATIONS = 20;
+
+/** A provider stream that emits no chunks for this long is treated as dead and aborted. */
+const LLM_STALL_MS = 180_000; // 3 minutes
 
 export interface IPriorStepOutput {
 	stepId: string;
@@ -55,6 +60,13 @@ export class AgentExecutor {
 
 	/** Set at the start of each execute() call from the agent definition */
 	private _modelSelection: ModelSelection | undefined;
+
+	/** Lazy — needs the constructor-injected llmService */
+	private _compactorInstance: ConversationCompactor | undefined;
+	private _compactor(): ConversationCompactor {
+		if (!this._compactorInstance) this._compactorInstance = new ConversationCompactor(this.llmService)
+		return this._compactorInstance
+	}
 
 	constructor(
 		private readonly llmService: ILLMMessageService,
@@ -146,6 +158,11 @@ export class AgentExecutor {
 			// LLMChatMessage is a union (Anthropic/OpenAI/Gemini); extract text safely.
 			const inputText = history.map(m => _extractMessageText(m)).join('');
 
+			// Pre-send context management: fold the aged part of the running
+			// conversation into a summarized message when it approaches the
+			// model's context window (tool outputs grow the history fast).
+			await this._compactHistoryIfNeeded(history, ctx, step);
+
 			let responseText: string;
 			try {
 				responseText = await this._callLLM(history);
@@ -204,8 +221,10 @@ export class AgentExecutor {
 				}
 			}
 
-			// Feed results back as user message for next iteration
-			history.push({ role: 'user', content: toolResultParts.join('\n\n') });
+			// Feed results back as user message for next iteration.
+			// Each result is capped so one huge tool output (file dump, build log)
+			// can't crowd out everything else in later iterations.
+			history.push({ role: 'user', content: toolResultParts.map(p => capToolResultForHistory(p)).join('\n\n') });
 		}
 
 		// Max iterations hit
@@ -332,13 +351,45 @@ export class AgentExecutor {
 				return;
 			}
 
-			this.llmService.sendLLMMessage({
+			// Providers disagree on where the system prompt may live. The executor
+			// keeps it as messages[0]; move it where the provider expects it:
+			// - anthropic/bedrock/gemini: separate `system`/`systemInstruction` param
+			//   (a system role inside `messages` is rejected by the API)
+			// - gemini: messages must use `parts` instead of `content`
+			// - openai-compatible: native system role inside `messages` works
+			const providerName = modelSelection.providerName;
+			let requestMessages = messages;
+			let separateSystemMessage: string | undefined;
+			const first = messages[0] as { role?: string; content?: unknown } | undefined;
+			if (first && first.role === 'system' && typeof first.content === 'string') {
+				if (providerName === 'anthropic' || providerName === 'awsBedrock' || providerName === 'gemini') {
+					separateSystemMessage = first.content;
+					requestMessages = messages.slice(1);
+				}
+			}
+			if (providerName === 'gemini') {
+				requestMessages = requestMessages.map((m): LLMChatMessage => {
+					const role = (m as { role: string }).role;
+					return { role: role === 'assistant' ? 'model' as const : 'user' as const, parts: [{ text: _extractMessageText(m) }] } as LLMChatMessage;
+				});
+			}
+
+			let stalled = false;
+			let cancelToken: string | null = null;
+			// Abort streams that stop emitting chunks entirely, so a dead
+			// connection can't hang the step forever.
+			const watchdog = createInactivityWatchdog(LLM_STALL_MS, () => {
+				stalled = true;
+				if (cancelToken) this.llmService.abort(cancelToken);
+			});
+
+			cancelToken = this.llmService.sendLLMMessage({
 				messagesType: 'chatMessages',
-				messages,
+				messages: requestMessages,
 				modelSelection,
 				modelSelectionOptions: undefined,
 				overridesOfModel: undefined,
-				separateSystemMessage: undefined,
+				separateSystemMessage,
 				// The executor manages its own tool protocol (JSON blocks +
 				// ScopedToolRegistry) and advertises it in the system prompt.
 				// chatMode 'agent' made the Void layer inject a second,
@@ -346,14 +397,70 @@ export class AgentExecutor {
 				// so models saw contradictory tool lists and called tools that
 				// exist in neither world coherently. null = no layer tools.
 				chatMode: null,
-				onText: () => {},
-				onFinalMessage: (p) => resolve(p.fullText),
-				onError: (p) => reject(new Error(p.message || p.fullError?.message || 'LLM error')),
-				onAbort: () => reject(new Error('LLM call aborted')),
+				onText: () => { watchdog.reset(); },
+				onFinalMessage: (p) => { watchdog.dispose(); resolve(p.fullText); },
+				onError: (p) => { watchdog.dispose(); reject(new Error(p.message || p.fullError?.message || 'LLM error')); },
+				onAbort: () => {
+					watchdog.dispose();
+					reject(new Error(stalled
+						? `LLM stream stalled — no data received for over ${Math.round(LLM_STALL_MS / 60_000)} minutes`
+						: 'LLM call aborted'));
+				},
 				logging: { loggingName: 'WorkflowAgent' },
 				allowedToolNames: [],
 			});
+
+			// sendLLMMessage already invoked onError synchronously when returning null
+			if (!cancelToken) watchdog.dispose();
 		});
+	}
+
+	// ─── History Compaction ───────────────────────────────────────────────────
+
+	/**
+	 * Fold the aged part of the running history (everything after the system
+	 * message) into one summarized user message when it approaches the model's
+	 * context window. Mutates `history` in place. Best-effort: on any failure
+	 * the history is left untouched.
+	 */
+	private async _compactHistoryIfNeeded(history: LLMChatMessage[], ctx: IToolExecutionContext, step: IWorkflowStep): Promise<void> {
+		const modelSelection = this._modelSelection;
+		if (!modelSelection || history.length < 8) return;
+
+		let contextWindow: number | undefined;
+		try {
+			const { overridesOfModel } = this.settingsService.state;
+			contextWindow = getModelCapabilities(modelSelection.providerName, modelSelection.modelName, overridesOfModel).contextWindow;
+		} catch {
+			return;
+		}
+		if (!contextWindow) return;
+
+		// history[0] is the system prompt — never compact it.
+		const systemMessage = history[0];
+		const compactables: CompactableMessage[] = [];
+		for (let i = 1; i < history.length; i++) {
+			const m = history[i];
+			const role = (m as { role: string }).role;
+			compactables.push({ role: role === 'assistant' ? 'assistant' : 'user', content: _extractMessageText(m) });
+		}
+
+		let result;
+		try {
+			result = await this._compactor().compactIfNeeded({
+				messages: compactables,
+				contextWindow,
+				modelSelection,
+			});
+		} catch {
+			return;
+		}
+		if (!result.summary || result.keepFromIdx <= 0) return;
+
+		ctx.log(`[${step.id}] compacting conversation: ~${result.tokensBefore} → ~${result.tokensAfter} est. tokens (llm summary: ${result.usedLLM})`);
+		const kept = history.slice(1 + result.keepFromIdx);
+		history.length = 0;
+		history.push(systemMessage, { role: 'user', content: renderConversationSummaryMessage(result.summary) }, ...kept);
 	}
 
 	// ─── System Prompt ────────────────────────────────────────────────────────

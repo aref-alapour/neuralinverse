@@ -31,6 +31,7 @@ import { IWorkspaceContextService } from '../../../../platform/workspace/common/
 import { ILLMMessageService } from '../../void/common/sendLLMMessageService.js';
 import { LLMChatMessage } from '../../void/common/sendLLMMessageTypes.js';
 import { IVoidSettingsService } from '../../void/common/voidSettingsService.js';
+import { ConversationCompactor } from '../../void/browser/conversationCompactor.js';
 import { IAgentStoreService } from './agentStoreService.js';
 import { IAgentRun, IWorkflowDefinition, WorkflowTrigger } from '../common/workflowTypes.js';
 import { IApprovalRequest, IApprovalResponse } from './orchestrator/approvalGate.js';
@@ -433,18 +434,33 @@ export class WorkflowAgentService extends Disposable implements IWorkflowAgentSe
 
 	/** Max user/assistant turns kept per agent conversation (bounds token growth) */
 	private static readonly MAX_CONVERSATION_MESSAGES = 24;
+	/** Max estimated tokens kept per agent conversation — the real bound */
+	private static readonly MAX_CONVERSATION_TOKENS = 32_000;
+	/** A single stored turn is capped so one giant output can't dominate memory */
+	private static readonly MAX_STORED_TURN_CHARS = 16_000;
 
 	private _getAgentConversation(agentId: string): LLMChatMessage[] {
 		return [...(this._agentConversations.get(agentId) ?? [])];
 	}
 
 	private _appendAgentConversation(agentId: string, userText: string, assistantText: string): void {
+		const cap = (t: string) => t.length > WorkflowAgentService.MAX_STORED_TURN_CHARS
+			? t.slice(0, WorkflowAgentService.MAX_STORED_TURN_CHARS) + '\n…[truncated]'
+			: t;
 		const conv = this._agentConversations.get(agentId) ?? [];
-		conv.push({ role: 'user', content: userText });
-		conv.push({ role: 'assistant', content: assistantText });
+		conv.push({ role: 'user', content: cap(userText) });
+		conv.push({ role: 'assistant', content: cap(assistantText) });
 		// Keep the most recent turns; old context ages out
 		if (conv.length > WorkflowAgentService.MAX_CONVERSATION_MESSAGES) {
 			conv.splice(0, conv.length - WorkflowAgentService.MAX_CONVERSATION_MESSAGES);
+		}
+		// Token cap — a few huge turns can exceed the message cap's intent
+		const tokensOf = (m: LLMChatMessage) => ConversationCompactor.estimateTextTokens(
+			(() => { const c = (m as { content?: unknown }).content; return typeof c === 'string' ? c : JSON.stringify(c ?? ''); })()
+		);
+		let totalTokens = conv.reduce((s, m) => s + tokensOf(m), 0);
+		while (conv.length > 2 && totalTokens > WorkflowAgentService.MAX_CONVERSATION_TOKENS) {
+			totalTokens -= tokensOf(conv.shift()!);
 		}
 		this._agentConversations.set(agentId, conv);
 	}
