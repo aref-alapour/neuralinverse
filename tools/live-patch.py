@@ -32,6 +32,28 @@ PATCHES = [
         'new Map(this.agentStore.getAgents().map(p=>[p.name,p])',
         'new Map(this.agentStore.getAgents().map(p=>[p.id,p])',
     ),
+    # ── feat/agent-conversation-memory (task 1: agent forgets conversation) ──
+    # A) runAgent: load stored conversation, stash for the executor, append
+    #    user+assistant turn after a successful run (cap 24 messages).
+    (
+        "agent-conversation-memory: runAgent loads/appends conversation",
+        'try{await this._orchestrator.run(n,s,a,h,t,o,p=>this._onDidChangeRun.fire(p))}catch(p){s.status="failed",s.error=p.message,s.endedAt=Date.now()}return this._finalizeRun(s),s})}',
+        'try{globalThis.__niAdhocConv=(globalThis.__niConv??(globalThis.__niConv=new Map)).get(e)||[],await this._orchestrator.run(n,s,a,h,t,o,p=>this._onDidChangeRun.fire(p))}catch(p){s.status="failed",s.error=p.message,s.endedAt=Date.now()}finally{delete globalThis.__niAdhocConv}'
+        'if(s.status==="done"&&s.finalOutput){const w=globalThis.__niConv,y=w.get(e)||[];y.push({role:"user",content:t},{role:"assistant",content:s.finalOutput}),y.length>24&&y.splice(0,y.length-24),w.set(e,y)}'
+        'return this._finalizeRun(s),s})}',
+    ),
+    # B) orchestrator: forward the stashed ad-hoc conversation to the executor.
+    (
+        "agent-conversation-memory: orchestrator forwards conversation",
+        '.execute(y,i,v,S,x,E,a)',
+        '.execute(y,i,v,S,x,E,a,globalThis.__niAdhocConv||[])',
+    ),
+    # C) executor: seed history with the prior conversation (8th arg).
+    (
+        "agent-conversation-memory: executor seeds history",
+        'for(d.push({role:"system",content:v}),d.push({role:"user",content:o}),',
+        'for(d.push({role:"system",content:v}),d.push(...(arguments[7]||[])),d.push({role:"user",content:o}),',
+    ),
 ]
 
 
