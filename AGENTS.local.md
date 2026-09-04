@@ -27,7 +27,7 @@ PR to upstream ONLY after the owner's explicit approval.
   - continuation of our unmerged work → branch from our feature branch
 - One concern per branch/PR. Reference the issue (`Fixes #N`).
 - Upstream PR branches must contain ONLY the code change — never our
-  local tooling (`tools/`, `AGENTS.local.md`, `PROMPT-SESSION.md`).
+  local tooling (`tools/`, `AGENTS.local.md`, `PROMPT-SESSION.md`, `تسک/`).
 
 ## Code scope
 
