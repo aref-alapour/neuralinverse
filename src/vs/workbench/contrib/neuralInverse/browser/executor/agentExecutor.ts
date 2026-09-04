@@ -339,7 +339,13 @@ export class AgentExecutor {
 				modelSelectionOptions: undefined,
 				overridesOfModel: undefined,
 				separateSystemMessage: undefined,
-				chatMode: 'agent',
+				// The executor manages its own tool protocol (JSON blocks +
+				// ScopedToolRegistry) and advertises it in the system prompt.
+				// chatMode 'agent' made the Void layer inject a second,
+				// unrelated tool catalog (filtered builtins + all MCP tools),
+				// so models saw contradictory tool lists and called tools that
+				// exist in neither world coherently. null = no layer tools.
+				chatMode: null,
 				onText: () => {},
 				onFinalMessage: (p) => resolve(p.fullText),
 				onError: (p) => reject(new Error(p.message || p.fullError?.message || 'LLM error')),
