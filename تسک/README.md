@@ -75,14 +75,36 @@ compaction ای که از نظر الگوریتم جلوتر است.
 16. **A5** plan mode → **A6** planner/worker → **E2** skills/hooks → **E3** CLI →
     **M4** docs indexing → **Q3** یکپارچه‌سازی سه stack (با توافق upstream)
 
+### دسته‌ی ۶ — پورت‌های freebuff (الگوهای راستی‌آزمایی‌شده از Codebuff)
+> کاتالوگ کامل + اصلاحات گزارش handoff: [`06-freebuff/README.md`](06-freebuff/README.md).
+> جای‌گذاری در دسته‌ها: F1 (ابزار ویرایش قطعی) کنار ابزارهای دسته‌ی ۳؛
+> F2 (compaction مکانیکی) هم‌زمان با C7؛ F3-الف/ب (بهداشت پیام/بازیابی stream) قبل
+> از هر کار طولانی روی executor؛ F4 (knowledge files + LESSONS + skills سازگار)
+> هم‌زمان با دسته‌ی memory؛ F5-ج (steering) هر وقت؛ F6-الف (ترمینال) با A4؛
+> F6-ب و F5-ب و F7 بعد از A1/A2.
+17. **F1** ابزار ویرایش قطعی (str_replace + تعمیر ورودی + خواندن پنجره‌ای + referencedBy)
+18. **F2** compaction مکانیکی با تریگر cache-aware (لایه‌ی زیر LLM-compactor موجود)
+19. **F3** بازیابی قطع stream + بهداشت پیام + توکن‌شمار محلی + cache breakpoints
+20. **F4** حافظه‌ی فایل‌محور: knowledge files + حلقه‌ی LESSONS + skills از `~/.claude/skills`
+21. **F5** propose/apply + best-of-N + steering + ask_user/followups/todos
+22. **F6** سخت‌سازی ترمینال (POSIX/nul/clamp) + کانال XML-in-stream
+23. **F7** eval harness (پورت BuffBench با داور دوگانه و runner رقبا)
+
+**قانون پورت freebuff:** فقط کپی/تطبیق با attribution (هدر + `ThirdPartyNotices.txt`)،
+هرگز dependency؛ منطق، نه import (Bun/Zod با layering ما نمی‌خواند). درس معماری:
+loop ساده پیش‌فرض (base3)، sub-agent فقط opt-in.
+
 ## وابستگی‌های کلیدی
 
 - M2 → M3، M4 (زیرساخت برداری مشترک)
 - C2 → C3، C4، C7 (breakdown جایی است که همه گزارش می‌دهند)
 - A1 → E3 (cwd override پیش‌نیاز CLI است)
-- A2 → A5، E3 (پروتکل native پایه‌ی plan mode و standalone است)
+- A2 → A5، E3، F6-ب (پروتکل native پایه‌ی plan mode و standalone و کانال XML است)
 - A4 → Q3 (مجوز مشترک پیش‌نیاز ادغام است)
-- C1 → C5، C6 (موتور وصل قبل از ارتقا)
+- C1 → C5، C6، F1-ج (موتور وصل قبل از ارتقا)
+- F1 → F7 (eval فقط بعد از ابزارهای ویرایش پایدار)
+- F2 ↔ C7 (دولایه: مکانیکی همیشه + LLM شرطی)
+- F4 ↔ M1/M3/E1/E2 (حافظه‌ی فایل‌محور مکمل حافظه‌ی برداری و rules)
 
 ## ثبت وضعیت
 
