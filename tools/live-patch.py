@@ -158,6 +158,114 @@ PATCHES = [
      "agents-tab: say why a run finished with no output",
      "else { activeMessageBubble.textContent = '(' + d.status + ')'; }",
      "else if (d.status === 'done') { activeMessageBubble.textContent = '(done with no output - the model returned an empty response)'; activeMessageBubble.style.color = '#f87171'; }\\n                        else { activeMessageBubble.textContent = '(' + d.status + ')'; }"),
+    # ── feat(agents): LOCAL intake questions — no LLM round-trip (task 4) ────
+    # The agent's opening/intake questions are asked in the Agents tab UI
+    # directly; the answers are packaged into the first message. The model
+    # never burns a turn asking them, so the first useful answer arrives one
+    # full round-trip sooner.
+    (BUNDLE,
+     "intake: package local answers into the first agent message",
+     'handleAgentMessage(e){const t=this.agentStore.getAgent(e.agentId);if(!t){this.webviewElement?.postMessage({command:"agentResponseError",data:`Agent "${e.agentId}" not found in .inverse/agents/`});return}this.webviewElement?.postMessage({command:"agentRunStarted"}),this.workflowAgentService.runAgent(t.id,e.input)',
+     'handleAgentMessage(e){const t=this.agentStore.getAgent(e.agentId);if(!t){this.webviewElement?.postMessage({command:"agentResponseError",data:`Agent "${e.agentId}" not found in .inverse/agents/`});return}var _in=e.input;if(e.intakeAnswers&&Object.keys(e.intakeAnswers).length>0){var _qa=(t.intakeQuestions||[]).map(q=>"- "+q.question+"\\n  Answer: "+(e.intakeAnswers[q.id]||"(not answered)")).join("\\n");_in=e.input+"\\n\\n<IntakeAnswers>\\n"+_qa+"\\n</IntakeAnswers>\\n(The user already answered the intake questions above in the UI. Use these answers and do NOT ask them again - start working immediately.)"}this.webviewElement?.postMessage({command:"agentRunStarted"}),this.workflowAgentService.runAgent(t.id,_in)'),
+    (BUNDLE,
+     "intake: render local intake card when an agent chat opens",
+     "chatMsgsEl.innerHTML = '';\n            showView('chat');\n            renderAgentList();",
+     "chatMsgsEl.innerHTML = '';\n            showView('chat');\n            renderIntakeCard(agent);\n            renderAgentList();"),
+    (BUNDLE,
+     "intake: webview helpers + send answers with first message",
+     "function sendMessage() {\n            var inp = document.getElementById('user-input');\n            var text = inp.value.trim();\n            if (!activeAgentId || !text) return;\n            addMsg(text, 'user');\n            vscode.postMessage({ command: 'sendMessage', data: { agentId: activeAgentId, input: text } });",
+     "function renderIntakeCard(agent) {\n"
+     "            if (!agent || !agent.intakeQuestions || !agent.intakeQuestions.length) return;\n"
+     "            var card = document.createElement('div');\n"
+     "            card.className = 'msg agent';\n"
+     "            card.id = 'intake-card';\n"
+     "            var b = document.createElement('div');\n"
+     "            b.className = 'bubble';\n"
+     "            b.style.background = 'rgba(59,130,246,0.07)';\n"
+     "            b.style.borderColor = 'rgba(59,130,246,0.25)';\n"
+     "            var title = document.createElement('div');\n"
+     "            title.textContent = 'Quick setup — answered locally, sent with your first message (no model call needed):';\n"
+     "            title.style.cssText = 'font-size:11px;font-weight:600;margin-bottom:6px;opacity:.85';\n"
+     "            b.appendChild(title);\n"
+     "            agent.intakeQuestions.forEach(function(q) {\n"
+     "                var lbl = document.createElement('label');\n"
+     "                lbl.textContent = q.question + (q.required ? ' *' : '');\n"
+     "                lbl.style.cssText = 'display:block;font-size:11px;margin:8px 0 3px';\n"
+     "                b.appendChild(lbl);\n"
+     "                if (q.options && q.options.length) {\n"
+     "                    var wrap = document.createElement('div');\n"
+     "                    wrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px';\n"
+     "                    q.options.forEach(function(opt) {\n"
+     "                        var chip = document.createElement('button');\n"
+     "                        chip.type = 'button';\n"
+     "                        chip.textContent = opt;\n"
+     "                        chip.dataset.qid = q.id;\n"
+     "                        chip.dataset.val = opt;\n"
+     "                        chip.style.cssText = 'padding:3px 10px;font-size:11px;border-radius:12px;cursor:pointer;border:1px solid var(--border);background:var(--bg-2);color:inherit';\n"
+     "                        chip.onclick = function() {\n"
+     "                            wrap.querySelectorAll('button').forEach(function(c) { c.style.background = 'var(--bg-2)'; c.style.fontWeight = 'normal'; });\n"
+     "                            chip.style.background = 'rgba(59,130,246,0.25)';\n"
+     "                            chip.style.fontWeight = '600';\n"
+     "                        };\n"
+     "                        wrap.appendChild(chip);\n"
+     "                    });\n"
+     "                    b.appendChild(wrap);\n"
+     "                } else {\n"
+     "                    var inp = document.createElement('input');\n"
+     "                    inp.type = 'text';\n"
+     "                    inp.placeholder = q.placeholder || '';\n"
+     "                    inp.dataset.intakeId = q.id;\n"
+     "                    inp.style.cssText = 'width:100%;box-sizing:border-box;padding:5px 8px;font-size:12px;background:var(--bg-2);border:1px solid var(--border);border-radius:4px;color:inherit';\n"
+     "                    b.appendChild(inp);\n"
+     "                }\n"
+     "            });\n"
+     "            card.appendChild(b);\n"
+     "            chatMsgsEl.appendChild(card);\n"
+     "        }\n"
+     "        function collectIntake() {\n"
+     "            var card = document.getElementById('intake-card');\n"
+     "            if (!card) return undefined;\n"
+     "            var answers = {};\n"
+     "            card.querySelectorAll('input[data-intake-id]').forEach(function(i) { answers[i.dataset.intakeId] = i.value.trim(); });\n"
+     "            card.querySelectorAll('button[data-qid]').forEach(function(c) {\n"
+     "                if (c.style.background && c.style.background !== 'var(--bg-2)') answers[c.dataset.qid] = c.dataset.val;\n"
+     "            });\n"
+     "            card.remove();\n"
+     "            return Object.keys(answers).length ? answers : undefined;\n"
+     "        }\n"
+     "        function sendMessage() {\n"
+     "            var inp = document.getElementById('user-input');\n"
+     "            var text = inp.value.trim();\n"
+     "            if (!activeAgentId || !text) return;\n"
+     "            addMsg(text, 'user');\n"
+     "            vscode.postMessage({ command: 'sendMessage', data: { agentId: activeAgentId, input: text, intakeAnswers: collectIntake() } });"),
+    (BUNDLE,
+     "intake: settings form field for defining questions",
+     'placeholder="System prompt for this agent..."></textarea>\n                    </div>\n                    <div class="field-group">\n                        <label>Allowed Tools</label>',
+     'placeholder="System prompt for this agent..."></textarea>\n                    </div>\n                    <div class="field-group">\n                        <label>Intake Questions (asked locally in chat — no model call)</label>\n                        <textarea id="edit-agent-intake" rows="3" placeholder="One per line. Options in [brackets], * prefix = required.&#10;e.g.  What should I focus on? [bugs|security|all]"></textarea>\n                    </div>\n                    <div class="field-group">\n                        <label>Allowed Tools</label>'),
+    (BUNDLE,
+     "intake: populate the field when an agent is selected",
+     "document.getElementById('edit-agent-instructions').value = agent.systemInstructions || '';",
+     "document.getElementById('edit-agent-instructions').value = agent.systemInstructions || '';\n"
+     "            document.getElementById('edit-agent-intake').value = (agent.intakeQuestions || []).map(function(q) {\n"
+     "                return (q.required ? '* ' : '') + q.question + (q.options && q.options.length ? ' [' + q.options.join('|') + ']' : '');\n"
+     "            }).join('\\\\n');"),
+    (BUNDLE,
+     "intake: parse and save questions from the settings form",
+     "updates: { name: name, description: desc, systemInstructions: instr, model: modelObj, allowedTools: tools }",
+     "updates: { name: name, description: desc, systemInstructions: instr, model: modelObj, allowedTools: tools, intakeQuestions: (function() {\n"
+     "                var out = [];\n"
+     "                document.getElementById('edit-agent-intake').value.split('\\\\n').forEach(function(l, i) {\n"
+     "                    l = l.trim(); if (!l) return;\n"
+     "                    var required = l.charAt(0) === '*';\n"
+     "                    if (required) l = l.replace(/^\\\\*\\\\s*/, '');\n"
+     "                    var m = l.match(/\\\\s*\\\\[([^\\\\]]+)\\\\]\\\\s*$/);\n"
+     "                    var options = m ? m[1].split('|').map(function(o) { return o.trim(); }).filter(Boolean) : undefined;\n"
+     "                    var question = (m ? l.slice(0, m.index) : l).trim();\n"
+     "                    if (question) out.push({ id: 'q' + (i + 1), question: question, options: options, required: required });\n"
+     "                });\n"
+     "                return out;\n"
+     "            })() }"),
     # ── fix(updater): endless update banner (server ignores commit) ─────────
     # Their update API returns the latest release for ANY commit hash, so the
     # client offers (and re-offers forever) the already-installed version.

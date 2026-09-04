@@ -332,7 +332,9 @@ export class WorkflowAgentService extends Disposable implements IWorkflowAgentSe
 	}
 
 	async runAgent(agentId: string, input: string): Promise<IAgentRun> {
-		// Synthesize a single-step workflow for ad-hoc agent execution
+		// Synthesize a single-step workflow for ad-hoc agent execution.
+		// The synthetic id is never in the config registry, so run directly —
+		// the old code first tried runWorkflow() which always rejected.
 		const syntheticWorkflow: IWorkflowDefinition = {
 			id: `adhoc-${agentId}`,
 			name: `Ad-hoc: ${agentId}`,
@@ -346,54 +348,51 @@ export class WorkflowAgentService extends Disposable implements IWorkflowAgentSe
 				allowedTools: [...ALL_FS_TOOLS, ...ALL_TERMINAL_TOOLS, ...ALL_GIT_TOOLS, ...ALL_HTTP_TOOLS].map(t => t.name),
 			}],
 		};
-		return this.runWorkflow(syntheticWorkflow.id, input, 'manual').catch(async () => {
-			// Workflow not in registry — use the synthetic one directly
-			const run = buildAgentRun(syntheticWorkflow, { kind: 'manual' });
-			const cancellation: ICancellationToken = { cancelled: false };
-			const agentMap = new Map(this.agentStore.getAgents().map(a => [a.id, a]));
-			for (const a of this.agentStore.getAgents()) {
-				agentMap.set(a.name.toLowerCase().replace(/\s+/g, '-'), a);
-				agentMap.set(a.name, a);
-			}
-			const folder = this.workspaceContextService.getWorkspace().folders[0];
+		const run = buildAgentRun(syntheticWorkflow, { kind: 'manual' });
+		const cancellation: ICancellationToken = { cancelled: false };
+		const agentMap = new Map(this.agentStore.getAgents().map(a => [a.id, a]));
+		for (const a of this.agentStore.getAgents()) {
+			agentMap.set(a.name.toLowerCase().replace(/\s+/g, '-'), a);
+			agentMap.set(a.name, a);
+		}
+		const folder = this.workspaceContextService.getWorkspace().folders[0];
 
-			this._activeRuns.set(run.id, run);
-			this._activeCancellations.set(run.id, cancellation);
-			this._onDidChangeRun.fire(run);
+		this._activeRuns.set(run.id, run);
+		this._activeCancellations.set(run.id, cancellation);
+		this._onDidChangeRun.fire(run);
 
-			if (!folder) {
-				run.status = 'failed';
-				run.error = 'No workspace folder open';
-				run.endedAt = Date.now();
-				this._finalizeRun(run);
-				return run;
-			}
-
-			const agentModelSel = this.settingsService.state.modelSelectionOfFeature['Chat'];
-			const baseCtx = { workspaceUri: folder.uri, fileService: this.fileService, modelInfo: agentModelSel ? { provider: agentModelSel.providerName, model: agentModelSel.modelName } : undefined };
-
-			try {
-				await this._orchestrator.run(
-					syntheticWorkflow, run, agentMap, baseCtx, input, cancellation,
-					(r) => this._onDidChangeRun.fire(r),
-					this._getAgentConversation(agentId),
-				);
-			} catch (e: any) {
-				run.status = 'failed';
-				run.error = e.message;
-				run.endedAt = Date.now();
-			}
-
-			// Append this turn to the agent's conversation so follow-up messages
-			// from the Agents tab keep their context. Only successful turns are
-			// recorded — a failed run produced no assistant reply worth keeping.
-			if (run.status === 'done' && run.finalOutput) {
-				this._appendAgentConversation(agentId, input, run.finalOutput);
-			}
-
+		if (!folder) {
+			run.status = 'failed';
+			run.error = 'No workspace folder open';
+			run.endedAt = Date.now();
 			this._finalizeRun(run);
 			return run;
-		});
+		}
+
+		const agentModelSel = this.settingsService.state.modelSelectionOfFeature['Chat'];
+		const baseCtx = { workspaceUri: folder.uri, fileService: this.fileService, modelInfo: agentModelSel ? { provider: agentModelSel.providerName, model: agentModelSel.modelName } : undefined };
+
+		try {
+			await this._orchestrator.run(
+				syntheticWorkflow, run, agentMap, baseCtx, input, cancellation,
+				(r) => this._onDidChangeRun.fire(r),
+				this._getAgentConversation(agentId),
+			);
+		} catch (e: any) {
+			run.status = 'failed';
+			run.error = e.message;
+			run.endedAt = Date.now();
+		}
+
+		// Append this turn to the agent's conversation so follow-up messages
+		// from the Agents tab keep their context. Only successful turns are
+		// recorded — a failed run produced no assistant reply worth keeping.
+		if (run.status === 'done' && run.finalOutput) {
+			this._appendAgentConversation(agentId, input, run.finalOutput);
+		}
+
+		this._finalizeRun(run);
+		return run;
 	}
 
 	/**
