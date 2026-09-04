@@ -29,6 +29,7 @@ import { registerSingleton, InstantiationType } from '../../../../platform/insta
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { ILLMMessageService } from '../../void/common/sendLLMMessageService.js';
+import { LLMChatMessage } from '../../void/common/sendLLMMessageTypes.js';
 import { IVoidSettingsService } from '../../void/common/voidSettingsService.js';
 import { IAgentStoreService } from './agentStoreService.js';
 import { IAgentRun, IWorkflowDefinition, WorkflowTrigger } from '../common/workflowTypes.js';
@@ -129,6 +130,9 @@ export class WorkflowAgentService extends Disposable implements IWorkflowAgentSe
 
 	/** runId → cancellation token for active runs */
 	private readonly _activeCancellations = new Map<string, ICancellationToken>();
+
+	/** Conversation memory per agent for ad-hoc (Agents tab) chat runs */
+	private readonly _agentConversations = new Map<string, LLMChatMessage[]>();
 	/** runId → IAgentRun for active runs */
 	private readonly _activeRuns = new Map<string, IAgentRun>();
 	/** Completed runs in reverse-chronological order */
@@ -371,6 +375,7 @@ export class WorkflowAgentService extends Disposable implements IWorkflowAgentSe
 				await this._orchestrator.run(
 					syntheticWorkflow, run, agentMap, baseCtx, input, cancellation,
 					(r) => this._onDidChangeRun.fire(r),
+					this._getAgentConversation(agentId),
 				);
 			} catch (e: any) {
 				run.status = 'failed';
@@ -378,9 +383,24 @@ export class WorkflowAgentService extends Disposable implements IWorkflowAgentSe
 				run.endedAt = Date.now();
 			}
 
+			// Append this turn to the agent's conversation so follow-up messages
+			// from the Agents tab keep their context. Only successful turns are
+			// recorded — a failed run produced no assistant reply worth keeping.
+			if (run.status === 'done' && run.finalOutput) {
+				this._appendAgentConversation(agentId, input, run.finalOutput);
+			}
+
 			this._finalizeRun(run);
 			return run;
 		});
+	}
+
+	/**
+	 * Reset the conversation memory of an agent (ad-hoc chat runs only).
+	 * The Agents tab can call this when the user starts a fresh chat.
+	 */
+	clearAgentConversation(agentId: string): void {
+		this._agentConversations.delete(agentId);
 	}
 
 	cancelRun(runId: string): void {
@@ -410,6 +430,24 @@ export class WorkflowAgentService extends Disposable implements IWorkflowAgentSe
 	}
 
 	// ─── Internal ─────────────────────────────────────────────────────────────
+
+	/** Max user/assistant turns kept per agent conversation (bounds token growth) */
+	private static readonly MAX_CONVERSATION_MESSAGES = 24;
+
+	private _getAgentConversation(agentId: string): LLMChatMessage[] {
+		return [...(this._agentConversations.get(agentId) ?? [])];
+	}
+
+	private _appendAgentConversation(agentId: string, userText: string, assistantText: string): void {
+		const conv = this._agentConversations.get(agentId) ?? [];
+		conv.push({ role: 'user', content: userText });
+		conv.push({ role: 'assistant', content: assistantText });
+		// Keep the most recent turns; old context ages out
+		if (conv.length > WorkflowAgentService.MAX_CONVERSATION_MESSAGES) {
+			conv.splice(0, conv.length - WorkflowAgentService.MAX_CONVERSATION_MESSAGES);
+		}
+		this._agentConversations.set(agentId, conv);
+	}
 
 	private _finalizeRun(run: IAgentRun): void {
 		this._activeRuns.delete(run.id);

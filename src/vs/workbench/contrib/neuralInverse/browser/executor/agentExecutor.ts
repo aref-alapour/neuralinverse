@@ -78,6 +78,7 @@ export class AgentExecutor {
 		ctx: IToolExecutionContext,
 		input: string,
 		cancellation: ICancellationToken,
+		priorConversation: LLMChatMessage[] = [],
 	): Promise<void> {
 		// Resolve model selection: prefer agent's own model, fall back to global Chat model.
 		// agent.model stores providerName as plain string (JSON), so cast to ModelSelection.
@@ -115,6 +116,12 @@ export class AgentExecutor {
 
 		const systemPrompt = this._buildSystemPrompt(agent, toolSchemas, priorOutputs, workspaceContext);
 		history.push({ role: 'system', content: systemPrompt });
+
+		// ── Prior conversation (multi-turn agent chat) ────────────────────────
+		// Ad-hoc agent runs from the Agents tab pass the ongoing conversation so
+		// follow-up messages keep their context. Workflow runs pass [] (steps get
+		// context via priorOutputs instead).
+		history.push(...priorConversation);
 
 		// ── Initial user message ───────────────────────────────────────────────
 		history.push({ role: 'user', content: input });

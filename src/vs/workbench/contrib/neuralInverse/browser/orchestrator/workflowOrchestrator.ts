@@ -35,6 +35,7 @@
  */
 
 import { ILLMMessageService } from '../../../void/common/sendLLMMessageService.js';
+import { LLMChatMessage } from '../../../void/common/sendLLMMessageTypes.js';
 import { IVoidSettingsService } from '../../../void/common/voidSettingsService.js';
 import {
 	IAgentDefinition, IWorkflowDefinition, IWorkflowStep, IAgentRun, IStepRun,
@@ -82,6 +83,7 @@ export class WorkflowOrchestrator {
 		input: string,
 		cancellation: ICancellationToken,
 		onUpdate: RunUpdateCallback,
+		priorConversation: LLMChatMessage[] = [],
 	): Promise<IAgentRun> {
 
 		run.status = 'planning';
@@ -143,7 +145,7 @@ export class WorkflowOrchestrator {
 			// Run all steps in this level concurrently
 			await Promise.all(level.map(step => this._runStep(
 				step, run, agents, baseCtx, input, stepOutputs, cancellation, onUpdate,
-				branchInactiveIds, toolCache, budgetTracker, composer,
+				branchInactiveIds, toolCache, budgetTracker, composer, priorConversation,
 			)));
 
 			// Collect outputs and check for failures before advancing to next level
@@ -231,6 +233,7 @@ export class WorkflowOrchestrator {
 		toolCache: ToolResultCache,
 		budgetTracker: BudgetTracker | undefined,
 		composer: WorkflowComposer,
+		priorConversation: LLMChatMessage[] = [],
 	): Promise<void> {
 		const stepRun = run.steps.find(s => s.stepId === step.id);
 		if (!stepRun) return;
@@ -298,7 +301,7 @@ export class WorkflowOrchestrator {
 				toolCache, step.cacheConfig, budgetTracker,
 			);
 
-			await executor.execute(agent, step, stepRun, priorOutputs, toolCtx, stepInput, cancellation);
+			await executor.execute(agent, step, stepRun, priorOutputs, toolCtx, stepInput, cancellation, priorConversation);
 
 			// Read status after async mutation — use string comparison to bypass narrowing
 			const statusAfterExecute = stepRun.status as string;
