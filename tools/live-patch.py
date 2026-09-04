@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 BUNDLE = Path(r"C:\Program Files\NeuralInverse\resources\app\out\vs\workbench\workbench.desktop.main.js")
+PRODUCT_JSON = Path(r"C:\Program Files\NeuralInverse\resources\app\product.json")
 
 # Each patch: (name, old_minified_snippet, replacement)
 # Keep snippets exactly as they appear in the minified bundle.
@@ -75,12 +76,38 @@ def main() -> int:
             print("ERROR: no .orig backup to restore")
             return 1
         shutil.copy2(backup, BUNDLE)
+        pbackup = PRODUCT_JSON.with_suffix(".json.orig")
+        if pbackup.exists():
+            shutil.copy2(pbackup, PRODUCT_JSON)
+            print("Reverted product.json (checksums restored).")
         print("Reverted to pristine bundle.")
         return 0
 
     if not backup.exists():
         shutil.copy2(BUNDLE, backup)
         print(f"Backup saved: {backup.name}")
+
+    # Patched bundles fail VS Code's core-file checksum verification
+    # ("installation appears to be corrupt" dialog). Dropping the checksums
+    # map from product.json disables that comparison for patched files.
+    if PRODUCT_JSON.exists():
+        import json
+        pbackup = PRODUCT_JSON.with_suffix(".json.orig")
+        try:
+            pdata = json.loads(PRODUCT_JSON.read_text(encoding="utf-8-sig"))
+            if "checksums" in pdata:
+                if not pbackup.exists():
+                    shutil.copy2(PRODUCT_JSON, pbackup)
+                    print(f"Backup saved: {pbackup.name}")
+                del pdata["checksums"]
+                PRODUCT_JSON.write_text(
+                    json.dumps(pdata, indent="\t", ensure_ascii=False) + "\n",
+                    encoding="utf-8")
+                print("OK    product.json: checksums removed (integrity dialog off)")
+            else:
+                print("SKIP  product.json: no checksums (already fixed or n/a)")
+        except Exception as e:
+            print(f"WARN  product.json: {e}")
 
     data = BUNDLE.read_text(encoding="utf-8")
     changed = False
