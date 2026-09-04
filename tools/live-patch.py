@@ -54,6 +54,12 @@ PATCHES = [
         'for(d.push({role:"system",content:v}),d.push({role:"user",content:o}),',
         'for(d.push({role:"system",content:v}),d.push(...(arguments[7]||[])),d.push({role:"user",content:o}),',
     ),
+    # ── fix: no Void-layer tools in executor LLM calls (double tool catalog) ──
+    (
+        "executor chatMode null: stop injecting Void/MCP tools into agent runs",
+        'chatMode:"agent",onText',
+        'chatMode:null,onText',
+    ),
 ]
 
 
