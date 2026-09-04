@@ -266,6 +266,16 @@ PATCHES = [
      "                });\n"
      "                return out;\n"
      "            })() }"),
+    # ── fix: agent tool-name mismatches silently stripped capabilities ───────
+    # Agent definitions referenced Void-chat-style tool names (webFetch,
+    # editFile, rewriteFile) that don't exist in the workflow registry — scope()
+    # dropped them with just a console.warn, so web-researcher (only tool:
+    # webFetch) ran completely tool-less and code executors couldn't edit files.
+    # Aliases now map those names to their registry equivalents, with dedup.
+    (BUNDLE,
+     "registry: alias Void-style tool names so agents keep their capabilities",
+     'scope(i){const e=new Map;for(const t of i){const n=this._tools.get(t);n?e.set(t,n):console.warn(`[ToolRegistry] Scoped tool "${t}" not found in registry`)}return new Qxs(e)}',
+     'scope(i){const _al={webFetch:"httpRequest",web_fetch:"httpRequest",fetchUrl:"httpRequest",editFile:"writeFile",edit_file:"writeFile",rewriteFile:"writeFile",rewrite_file:"writeFile",write_file:"writeFile",read_file:"readFile",delete_file:"deleteFile",bash:"runCommand",run:"runCommand",exec:"runCommand",shell:"runCommand",terminal:"runCommand",run_script:"runScript",git_status:"gitStatus",git_diff:"gitDiff",git_log:"gitLog",grep:"searchCode",search:"searchCode",glob:"listDirectory",list_dir:"listDirectory"};const e=new Map;for(const t of i){const _n=_al[t]||t;const n=this._tools.get(_n);n?e.has(_n)||e.set(_n,n):console.warn(`[ToolRegistry] Scoped tool "${t}" not found in registry`)}return new Qxs(e)}'),
     # ── fix(updater): endless update banner (server ignores commit) ─────────
     # Their update API returns the latest release for ANY commit hash, so the
     # client offers (and re-offers forever) the already-installed version.
