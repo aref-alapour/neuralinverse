@@ -1875,6 +1875,7 @@ export class AgentManagerPart extends Part {
                         var d = msg.data;
                         if (d.status === 'done' && d.output) { activeMessageBubble.textContent = d.output; }
                         else if (d.error) { activeMessageBubble.textContent = 'Error: ' + d.error; activeMessageBubble.style.color = '#f87171'; }
+                        else if (d.status === 'done') { activeMessageBubble.textContent = '(done with no output — the model returned an empty response)'; activeMessageBubble.style.color = '#f87171'; }
                         else { activeMessageBubble.textContent = '(' + d.status + ')'; }
                         chatMsgsEl.scrollTop = chatMsgsEl.scrollHeight;
                         activeMessageBubble = null;

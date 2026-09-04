@@ -381,16 +381,22 @@ const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onE
 		let fullReasoningSoFar = ''
 		let fullTextSoFar = ''
 		let toolCallsBuffer: { name: string, id: string, args: string }[] = []
+		// A stream that ends without any finish_reason chunk was cut off mid-response
+		// (connection reset / node-fetch premature close). Without this check the
+		// partial text was treated as a successful final message.
+		let gotFinishReason = false
 
 		openai.chat.completions
 			.create(options)
-			.then(async response => {
-				_setAborter(() => response.controller.abort())
-				// when receive text
-				for await (const chunk of response) {
-					// message
-					const newText = chunk.choices[0]?.delta?.content ?? ''
-					fullTextSoFar += newText
+				.then(async response => {
+					_setAborter(() => response.controller.abort())
+					// when receive text
+					for await (const chunk of response) {
+						// message
+						const newText = chunk.choices[0]?.delta?.content ?? ''
+						fullTextSoFar += newText
+
+						if (chunk.choices[0]?.finish_reason != null) gotFinishReason = true
 
 					// tool call
 					for (const tool of chunk.choices[0]?.delta?.tool_calls ?? []) {
@@ -431,6 +437,16 @@ const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onE
 						setTimeout(() => attemptStream(attemptNum + 1), 800 * (attemptNum + 1))
 					} else {
 						onError({ message: 'Neural Inverse: Response from model was empty.\n\nHelp: https://neuralinverse.com/docs/troubleshooting/empty-response', fullError: null })
+					}
+				}
+				else if (!gotFinishReason) {
+					// Stream ended without a finish marker — the connection was cut
+					// mid-response. Retry; the partial text must not be treated as a
+					// complete answer.
+					if (attemptNum < MAX_EMPTY_RETRIES) {
+						setTimeout(() => attemptStream(attemptNum + 1), 800 * (attemptNum + 1))
+					} else {
+						onError({ message: 'Model stream ended prematurely (network error: connection closed before the response finished). Try sending again.', fullError: null })
 					}
 				}
 				else {

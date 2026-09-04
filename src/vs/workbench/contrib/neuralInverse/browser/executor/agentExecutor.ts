@@ -40,6 +40,9 @@ import { BudgetTracker } from './budgetTracker.js';
 
 const DEFAULT_MAX_ITERATIONS = 20;
 
+/** Retries (on top of the first attempt) when the LLM returns an empty response */
+const MAX_EMPTY_RESPONSE_RETRIES = 2;
+
 /** A provider stream that emits no chunks for this long is treated as dead and aborted. */
 const LLM_STALL_MS = 180_000; // 3 minutes
 
@@ -163,12 +166,25 @@ export class AgentExecutor {
 			// model's context window (tool outputs grow the history fast).
 			await this._compactHistoryIfNeeded(history, ctx, step);
 
-			let responseText: string;
+			let responseText: string | null = null;
 			try {
-				responseText = await this._callLLM(history);
+				// An empty response is usually transient (proxy hiccup, dropped
+				// stream) — retry instead of finishing the step with no output,
+				// which the UI renders as a bare "(done)".
+				for (let attempt = 0; attempt <= MAX_EMPTY_RESPONSE_RETRIES; attempt++) {
+					const t = await this._callLLM(history);
+					if (t && t.trim()) { responseText = t; break; }
+					ctx.log(`[${step.id}] empty LLM response (attempt ${attempt + 1}/${MAX_EMPTY_RESPONSE_RETRIES + 1})`);
+				}
 			} catch (e: any) {
 				stepRun.status = 'failed';
 				stepRun.error = `LLM error: ${e.message}`;
+				stepRun.endedAt = Date.now();
+				return;
+			}
+			if (responseText === null) {
+				stepRun.status = 'failed';
+				stepRun.error = `LLM returned an empty response after ${MAX_EMPTY_RESPONSE_RETRIES + 1} attempts`;
 				stepRun.endedAt = Date.now();
 				return;
 			}

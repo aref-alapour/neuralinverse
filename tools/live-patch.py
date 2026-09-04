@@ -23,6 +23,9 @@ APP = Path(r"C:\Program Files\NeuralInverse\resources\app")
 BUNDLE = APP / "out/vs/workbench/workbench.desktop.main.js"
 MAINJS = APP / "out/main.js"
 PRODUCT_JSON = APP / "product.json"
+# Plain (non-minified) npm dep — the OpenAI SDK in the main process routes
+# every LLM request through this copy of node-fetch v2.
+NODEFETCH = APP / "node_modules/node-fetch/lib/index.js"
 
 UPDATE_API = ("https://tcnnnsytzd.execute-api.us-east-1.amazonaws.com"
               "/api/update/win32-x64/stable/0000000000000000000000000000000000000000")
@@ -119,6 +122,42 @@ PATCHES = [
      "executor: provider-format fix + history compaction + stall watchdog",
      '_callLLM(i,e){return new Promise((t,n)=>{const s=this._modelSelection??this.settingsService.state.modelSelectionOfFeature.Chat;if(!s){n(new Error("No model selected. Configure a model in Void settings or set one on the agent."));return}this.llmService.sendLLMMessage({messagesType:"chatMessages",messages:i,modelSelection:s,modelSelectionOptions:void 0,overridesOfModel:void 0,separateSystemMessage:void 0,chatMode:null,onText:()=>{},onFinalMessage:o=>t(o.fullText),onError:o=>n(new Error(o.message||o.fullError?.message||"LLM error")),onAbort:()=>n(new Error("LLM call aborted")),logging:{loggingName:"WorkflowAgent"},allowedToolNames:[]})})}',
      '_callLLM(i,e){return(async()=>{const s=this._modelSelection??this.settingsService.state.modelSelectionOfFeature.Chat;if(!s)throw new Error("No model selected. Configure a model in Void settings or set one on the agent.");await __niC.execCompact(this.llmService,i,s);var _ps=__niC.providerSplit(i,s.providerName),_w=__niC.watchdog(18e4,()=>{_w.stalled=1,_w.tok&&this.llmService.abort(_w.tok)});return new Promise((t,n)=>{var _tok=this.llmService.sendLLMMessage({messagesType:"chatMessages",messages:_ps.messages,modelSelection:s,modelSelectionOptions:void 0,overridesOfModel:void 0,separateSystemMessage:_ps.system,chatMode:null,onText:()=>{_w.reset()},onFinalMessage:o=>{_w.dispose(),t(o.fullText)},onError:o=>{_w.dispose(),n(new Error(o.message||o.fullError?.message||"LLM error"))},onAbort:()=>{_w.dispose(),n(new Error(_w.stalled?"LLM stream stalled - no data received for over 3 minutes":"LLM call aborted"))},logging:{loggingName:"WorkflowAgent"},allowedToolNames:[]});_w.tok=_tok})})()}'),
+    # ── fix: node-fetch uncaught crash on cut connections (task 3) ───────────
+    # main.log showed an uncaught TypeError storm ("Cannot read properties of
+    # null (reading 'body')") from node-fetch 2.6.8: when omni.local closes a
+    # chunked response early, fixResponseChunkedTransferBadEnding's callback
+    # runs with response === null. Every OpenAI-compatible LLM request in the
+    # main process goes through this code, so each cut stream also crashed the
+    # request handling — the SDK stream then just "ended" and partial/empty
+    # text was treated as a successful final message.
+    (NODEFETCH,
+     "node-fetch: guard premature-close destroyStream",
+     'fixResponseChunkedTransferBadEnding(req, function (err) {\n\t\t\tif (signal && signal.aborted) {\n\t\t\t\treturn;\n\t\t\t}\n\n\t\t\tdestroyStream(response.body, err);\n\t\t});',
+     'fixResponseChunkedTransferBadEnding(req, function (err) {\n\t\t\tif (signal && signal.aborted) {\n\t\t\t\treturn;\n\t\t\t}\n\n\t\t\tif (response && response.body) {\n\t\t\t\tdestroyStream(response.body, err);\n\t\t\t}\n\t\t});'),
+    # ── fix: cut streams / empty responses treated as success (task 3) ───────
+    # A stream that ends WITHOUT any finish_reason chunk was cut mid-response;
+    # the old code called onFinalMessage with the partial text. Retry, then
+    # surface a clear (retryable-classified) error.
+    (MAINJS,
+     "main/impl: declare finish-reason flag in attemptStream",
+     'le=je=>{let Ve="",xi="",ti=[];',
+     'le=je=>{let Ve="",xi="",ti=[],NiFr=!1;'),
+    (MAINJS,
+     "main/impl: track finish_reason in openai-compat stream loop",
+     'for await(const Ni of Lt){const ii=Ni.choices[0]?.delta?.content??"";xi+=ii;',
+     'for await(const Ni of Lt){const ii=Ni.choices[0]?.delta?.content??"";xi+=ii;Ni.choices[0]?.finish_reason!=null&&(NiFr=!0);'),
+    (MAINJS,
+     "main/impl: premature stream end retries instead of partial success",
+     'if(!xi&&!Ve&&ti.length===0)je<ae?setTimeout(()=>le(je+1),800*(je+1)):s({message:`Neural Inverse: Response from model was empty.\n\nHelp: https://neuralinverse.com/docs/troubleshooting/empty-response`,fullError:null});else{',
+     'if(!xi&&!Ve&&ti.length===0)je<ae?setTimeout(()=>le(je+1),800*(je+1)):s({message:`Neural Inverse: Response from model was empty.\n\nHelp: https://neuralinverse.com/docs/troubleshooting/empty-response`,fullError:null});else if(!NiFr)je<ae?setTimeout(()=>le(je+1),800*(je+1)):s({message:"Model stream ended prematurely (network error: connection closed before the response finished). Try sending again.",fullError:null});else{'),
+    (BUNDLE,
+     "executor: retry empty LLM responses instead of finishing '(done)'",
+     'let S;try{S=await this._callLLM(d)}catch(D){t.status="failed",t.error=`LLM error: ${D.message}`,t.endedAt=Date.now();return}',
+     'let S=null;try{for(var _na=0;_na<=2;_na++){var _nt=await this._callLLM(d);if(_nt&&_nt.trim()){S=_nt;break}s.log(`[${e.id}] empty LLM response (attempt ${_na+1}/3)`)}if(null===S)throw new Error("LLM returned an empty response after 3 attempts")}catch(D){t.status="failed",t.error=`LLM error: ${D.message}`,t.endedAt=Date.now();return}'),
+    (BUNDLE,
+     "agents-tab: say why a run finished with no output",
+     "else { activeMessageBubble.textContent = '(' + d.status + ')'; }",
+     "else if (d.status === 'done') { activeMessageBubble.textContent = '(done with no output - the model returned an empty response)'; activeMessageBubble.style.color = '#f87171'; }\\n                        else { activeMessageBubble.textContent = '(' + d.status + ')'; }"),
     # ── fix(updater): endless update banner (server ignores commit) ─────────
     # Their update API returns the latest release for ANY commit hash, so the
     # client offers (and re-offers forever) the already-installed version.
@@ -275,7 +314,7 @@ def patch_product_json() -> None:
 def main() -> int:
     revert = "--revert" in sys.argv
     if revert:
-        for f in (BUNDLE, MAINJS, PRODUCT_JSON):
+        for f in (BUNDLE, MAINJS, PRODUCT_JSON, NODEFETCH):
             b = f.with_suffix(f.suffix + ".orig")
             if b.exists():
                 shutil.copy2(b, f)
