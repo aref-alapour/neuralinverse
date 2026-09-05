@@ -49,6 +49,12 @@ import { wrapToolResultForOSS } from '../common/ossModelEnhancement/progressFeed
 import { workspaceFilteredThreads } from '../common/chatThreadUtils.js';
 import { getModelCapabilities } from '../common/modelCapabilities.js';
 import { CompactableMessage, ConversationCompactor, createInactivityWatchdog, isContextOverflowError, isRetryableLlmError, renderConversationSummaryMessage } from './conversationCompactor.js';
+import { IContextLedgerService } from './contextLedgerService.js';
+import { ILedgerAppendInput, IContextUsageReport } from '../common/ledgerTypes.js';
+import { EpisodeSummarizer } from './episodeSummarizer.js';
+import { buildWorkingBrief } from '../common/workingBriefBuilder.js';
+import { assemble } from '../common/contextAssembler.js';
+import { DEFAULT_LEDGER_POLICY } from '../common/ledgerPolicy.js';
 
 
 // Tool name aliases: OSS models use alternative names for built-in tools
@@ -205,6 +211,183 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		return this._compactor
 	}
 
+	// ── Context Ledger (task M5) ─────────────────────────────────────────────
+	// The ledger path (flag contextLedgerEnabled) journals every message
+	// append-only, closes immutable episodes, and sends a deterministic
+	// working brief instead of a rewritten rolling summary. The compactor
+	// above stays as the exact legacy path for flag=off.
+	// lazy like _compactor: needs the constructor-injected _llmMessageService
+	private _ledgerSummarizer: EpisodeSummarizer | undefined
+	private _getLedgerSummarizer(): EpisodeSummarizer {
+		if (!this._ledgerSummarizer) this._ledgerSummarizer = new EpisodeSummarizer(this._llmMessageService)
+		return this._ledgerSummarizer
+	}
+	/** last sent prefix per thread — feeds the D5 cache-stability check */
+	private readonly _ledgerPrevPrefix = new Map<string, { revision: number; prefix: string }>()
+	/** last assembler report per thread — consumed by the context gauge (C2) */
+	private readonly _ledgerUsageReports = new Map<string, IContextUsageReport>()
+	/** message objects already journaled this session (migration dedupe) */
+	private readonly _journaledThisSession = new Map<string, Set<ChatMessage>>()
+	private _ledgerWarned = false
+
+	private _ledgerEnabled(): boolean {
+		return this._settingsService.state.globalSettings.contextLedgerEnabled
+	}
+
+	private _warnLedgerOnce(): void {
+		if (this._ledgerWarned) return
+		this._ledgerWarned = true
+		console.warn('[ChatThread] context ledger degraded — falling back where needed; conversation continues unaffected')
+	}
+
+	/** Map a stored ChatMessage to a journal append; null for non-conversational roles. */
+	private _toLedgerInput(m: ChatMessage): ILedgerAppendInput | null {
+		if (m.role === 'checkpoint') return null
+		if (m.role === 'interrupted_streaming_tool') return null
+		if (m.role === 'assistant') {
+			const content = (m.displayContent || '').replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim()
+			if (!content) return null
+			return { role: 'assistant', content }
+		}
+		if (m.role === 'tool') return { role: 'tool', content: m.content ?? '', name: m.name }
+		if (m.role === 'user') return { role: 'user', content: m.content ?? '' }
+		return null
+	}
+
+	private _journalMessage(threadId: string, m: ChatMessage): void {
+		const input = this._toLedgerInput(m)
+		if (!input) return
+		let set = this._journaledThisSession.get(threadId)
+		if (!set) { set = new Set(); this._journaledThisSession.set(threadId, set) }
+		set.add(m)
+		this._contextLedgerService.append(threadId, input).catch(() => this._warnLedgerOnce())
+	}
+
+	/**
+	 * Context Ledger send path (task M5 phase 2/4). Copy-only migration of
+	 * legacy threads on first send, then budget-aware assembly
+	 * (brief → tail). Never throws — falls back to the raw messages.
+	 */
+	private async _assembleLedgerThread(threadId: string, rawMessages: ChatMessage[], modelSelection: ModelSelection | null, force: boolean): Promise<ChatMessage[]> {
+		if (!modelSelection || rawMessages.length === 0) return rawMessages
+		try {
+			// copy-only migration: a legacy thread with stored history but an
+			// empty journal gets its messages appended once. THREAD_STORAGE_KEY
+			// is never touched — flag-off must reproduce today's exact behavior.
+			const stats = await this._contextLedgerService.stats(threadId)
+			if (!stats || stats.entryCount === 0) {
+				const journaled = this._journaledThisSession.get(threadId)
+				for (const m of rawMessages) {
+					if (journaled?.has(m)) continue
+					const input = this._toLedgerInput(m)
+					if (input) await this._contextLedgerService.append(threadId, input)
+				}
+			}
+
+			// overflow recovery / manual compact: close an episode right now
+			// (awaited — the retry depends on the folded prefix)
+			if (force) await this._closeEpisodeIfNeeded(threadId, modelSelection, true)
+
+			const brief = await this._contextLedgerService.getBrief(threadId)
+			const { compactables, raws } = this._toCompactables(rawMessages)
+			const { overridesOfModel } = this._settingsService.state
+			const { contextWindow, reservedOutputTokenSpace } = getModelCapabilities(modelSelection.providerName, modelSelection.modelName, overridesOfModel)
+			const assembled = assemble<ChatMessage>({
+				raws,
+				compactables,
+				brief,
+				contextWindow,
+				reservedOutputTokenSpace,
+				policy: DEFAULT_LEDGER_POLICY,
+				prevPrefix: this._ledgerPrevPrefix.get(threadId) ?? null,
+			})
+			if (!assembled.report.cacheStable) {
+				// D5 violation: same brief revision but a different prefix — the
+				// provider prompt cache would be burned on every request
+				console.warn('[ChatThread] ledger cache break: prefix changed without a brief revision bump')
+			}
+			if (brief !== null) this._ledgerPrevPrefix.set(threadId, { revision: brief.revision, prefix: brief.text })
+			this._ledgerUsageReports.set(threadId, assembled.report)
+
+			// the assembled head (brief/pinned/recalled synthetics) maps to plain
+			// user ChatMessages; the verbatim tail passes through untouched
+			const tailLen = raws.length - assembled.keepFromIdx
+			const headMsgs = assembled.messages.slice(0, assembled.messages.length - tailLen)
+			const head: ChatMessage[] = headMsgs.map(m => ({
+				role: 'user' as const,
+				content: (m as { content: string }).content,
+				displayContent: '',
+				selections: null,
+				state: defaultMessageState,
+			}))
+			if (assembled.report.totalTokens > assembled.report.availableInputTokens) {
+				console.warn(`[ChatThread] ledger request over budget: ~${assembled.report.totalTokens} > ${assembled.report.availableInputTokens} tokens`)
+			}
+			return [...head, ...raws.slice(assembled.keepFromIdx)]
+		} catch {
+			this._warnLedgerOnce()
+			return rawMessages
+		}
+	}
+
+	/**
+	 * Close an episode when the boundary policy says so (tokens / idle /
+	 * force) and rebuild the working brief from all frozen episodes.
+	 * Background-safe: callers may fire-and-forget; failures warn once.
+	 */
+	private async _closeEpisodeIfNeeded(threadId: string, modelSelection: ModelSelection | null, force: boolean): Promise<void> {
+		if (!modelSelection) return
+		try {
+			const stats = await this._contextLedgerService.stats(threadId)
+			if (!stats || stats.entryCount === 0) return
+			const episodes = await this._contextLedgerService.listEpisodes(threadId)
+			// the tail window that must stay verbatim (tailMin + slack for the
+			// user-message boundary search)
+			const tail = await this._contextLedgerService.readTail(threadId, DEFAULT_LEDGER_POLICY.tailMinMessages + 4)
+			if (tail.length === 0) return
+			const idleMs = stats.lastEntryTs ? Date.now() - stats.lastEntryTs : 0
+			const decision = EpisodeSummarizer.decideBoundary(stats, tail.length, idleMs, DEFAULT_LEDGER_POLICY, { force })
+			if (!decision || !decision.close) return
+			const fromSeq = episodes.reduce((m, ep) => Math.max(m, ep.range.toSeq), 0) + 1
+			// safe boundary: the first `user` entry within the slack window that
+			// starts a NEW episode (strictly after the summarized end); without
+			// the seq check a second close would re-pick the previous boundary
+			// and produce an empty episode
+			const boundaryIdx = tail.findIndex(e => e.role === 'user' && e.seq > fromSeq)
+			if (boundaryIdx < 0 || boundaryIdx > 4) return
+			const toSeq = tail[boundaryIdx].seq - 1
+			if (toSeq < fromSeq) return
+			const entries = await this._contextLedgerService.readRange(threadId, fromSeq, toSeq)
+			if (entries.length === 0) return
+			const episode = await this._getLedgerSummarizer().summarizeEpisode({
+				threadId,
+				ordinal: episodes.length + 1,
+				entries,
+				range: { fromSeq, toSeq },
+				modelSelection,
+			})
+			await this._contextLedgerService.saveEpisode(episode)
+			const brief = buildWorkingBrief({
+				threadId,
+				previousBrief: await this._contextLedgerService.getBrief(threadId),
+				episodes: [...episodes, episode],
+				lastSeq: stats.lastSeq,
+				policy: DEFAULT_LEDGER_POLICY,
+			})
+			await this._contextLedgerService.saveBrief(brief)
+			// adopt the new revision cleanly on the next send
+			this._ledgerPrevPrefix.delete(threadId)
+			console.log(`[ChatThread] ledger episode ${episode.ordinal} frozen (${decision.reason}): seq ${fromSeq}-${toSeq}, brief revision ${brief.revision} (~${brief.tokens} tokens)`)
+		} catch {
+			this._warnLedgerOnce()
+		}
+	}
+
+	/** Last assembler usage report for the context gauge (task C2). */
+	getLedgerUsageReport(threadId: string): IContextUsageReport | undefined {
+		return this._ledgerUsageReports.get(threadId)
+	}
+
 	constructor(
 		@IStorageService private readonly _storageService: IStorageService,
 		@IVoidModelService private readonly _voidModelService: IVoidModelService,
@@ -223,6 +406,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		@IVoidInternalToolService private readonly _internalToolService: IVoidInternalToolService,
 		@IInstantiationService private readonly _instantiationService: IInstantiationService,
 		@IUserInputRequestService private readonly _userInputRequestService: IUserInputRequestService,
+		@IContextLedgerService private readonly _contextLedgerService: IContextLedgerService,
 	) {
 		super()
 		this.state = { allThreads: {}, currentThreadId: null as unknown as string } // default state
@@ -888,12 +1072,15 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 			this._setStreamState(threadId, { isRunning: 'idle', interrupt: idleInterruptor })
 
-			// Builds the outgoing request. Includes pre-send context compaction
-			// (opencode-style): when the thread approaches the model's context
-			// window, its aged prefix is folded into one summarized user message.
+			// Builds the outgoing request. Pre-send context management: the
+			// Context Ledger path (task M5) assembles brief + verbatim tail when
+			// the flag is on; otherwise the legacy opencode-style compactor
+			// folds the aged prefix into one summarized user message.
 			const buildMessages = async (forceCompaction: boolean) => {
 				const chatMessagesRaw = this.state.allThreads[threadId]?.messages ?? []
-				const chatMessages = await this._maybeCompactThreadForSend(threadId, chatMessagesRaw, modelSelection, forceCompaction)
+				const chatMessages = this._ledgerEnabled()
+					? await this._assembleLedgerThread(threadId, chatMessagesRaw, modelSelection, forceCompaction)
+					: await this._maybeCompactThreadForSend(threadId, chatMessagesRaw, modelSelection, forceCompaction)
 				return await this._convertToLLMMessagesService.prepareLLMChatMessages({
 					chatMessages,
 					modelSelection,
@@ -1076,6 +1263,12 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 				const { toolCalls, info } = llmRes
 
 				this._addMessageToThread(threadId, { role: 'assistant', displayContent: info.fullText, reasoning: info.fullReasoning, anthropicReasoning: info.anthropicReasoning })
+
+				// Context Ledger (task M5): after each completed reply, check in
+				// the background whether an episode should close (token target /
+				// idle). Non-blocking — the current request already went out and
+				// a closed episode only affects the NEXT send.
+				if (this._ledgerEnabled()) void this._closeEpisodeIfNeeded(threadId, modelSelection, false)
 
 				this._setStreamState(threadId, { isRunning: 'idle', interrupt: 'not_needed' }) // just decorative for clarity
 
@@ -2040,6 +2233,11 @@ We only need to do it for files that were edited since `from`, ie files between 
 		}
 		this._storeAllThreads(newThreads)
 		this._setState({ allThreads: newThreads }) // the current thread just changed (it had a message added to it)
+
+		// Context Ledger (task M5): mirror the message into the append-only
+		// journal. Fire-and-forget — the ledger degrades gracefully and must
+		// never block the UI write path.
+		if (this._ledgerEnabled()) this._journalMessage(threadId, message)
 	}
 
 	// sets the currently selected message (must be undefined if no message is selected)
