@@ -18,15 +18,19 @@ locally ALSO goes upstream as a clean issue/PR.
    report — never publish on your own initiative.
 2. **License / clean-room gate (2026-09-05):** for any third-party licensed
    codebase in our orbit (Codebuff/freebuff — Apache-2.0; ComfyUI — GPL-3.0;
-   any other external project): READ it to understand, TAKE IDEAS, learn the
-   design — but NEVER copy code verbatim or near-verbatim. No "ported" or
-   "adapted" files, no provenance-header copies, no mechanical
-   line-by-line translation. Implement concepts in OUR own architecture and
-   words so the result is fully ours and upstream-PR-able (upstream is a
-   public international project). Never add runtime dependencies from those
-   projects without the owner's explicit approval. (Code inside this fork's
-   own MIT lineage — VS Code/Void/NeuralInverse — is our codebase, not
-   third-party; normal fork rules apply to it.)
+   Cline — Apache-2.0; any other external project): READ it to understand,
+   TAKE IDEAS, learn the design — but NEVER copy code verbatim or
+   near-verbatim. No "ported" or "adapted" files, no provenance-header
+   copies, no mechanical line-by-line translation. Implement concepts in OUR
+   own architecture and words so the result is fully ours and
+   upstream-PR-able (upstream is a public international project). Never add
+   runtime dependencies from those projects without the owner's explicit
+   approval. (Code inside this fork's own MIT lineage —
+   VS Code/Void/NeuralInverse — is our codebase, not third-party; normal
+   fork rules apply to it.) Local study clones live under `projects/`
+   (gitignored): `projects/ide-extensions/cline` @ dac3b35b, freebuff,
+   comfyui. Orientation docs: CLINE-HANDOFF.md, FREEBUFF-HANDOFF.md,
+   COMFYUI-HANDOFF.md, AI-LANDSCAPE-2026.md.
 3. **Live-test gate:** a fix is "done" only after the owner tested it on the
    installed app (see Live testing). Source-only = not done.
 4. **Live-patch gate:** every source change ships in the SAME task with its
