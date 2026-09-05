@@ -322,7 +322,10 @@ export function mergeEpisodeBodies(episodes: IEpisodeSummary[], policy: ILedgerP
 		.filter(([key]) => !rejectedKeys.has(key))
 		.map(([, e]) => e);
 	const decisions = capByRecency(liveDecisions, policy.maxDecisions, e => e.what)
-		.map(e => ({ what: e.what, why: e.why, alternatives: e.alternatives, sourceIds: e.sourceIds }));
+		// `alternatives` is omitted rather than set to undefined: the merged body is
+		// persisted as JSON (brief.json) and read back, so it must be round-trip
+		// stable — an explicit undefined key would not survive the reload.
+		.map(e => ({ what: e.what, why: e.why, ...(e.alternatives ? { alternatives: e.alternatives } : {}), sourceIds: e.sourceIds }));
 
 	// ── Rule 5 — failures: only resolution !== 'fixed' survives. A failure that a
 	//    later episode marks fixed disappears entirely (newest resolution wins on

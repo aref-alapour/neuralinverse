@@ -15,7 +15,7 @@ import {
 	RECALL_WEIGHTS_NO_EMBEDDINGS,
 	ILedgerRecallCandidate,
 } from '../../../../browser/context/search/ledgerRecallService.js';
-import { ILedgerEntry, IEpisodeSummary, IEpisodeBody } from '../../../../void/common/ledgerTypes.js';
+import { ILedgerEntry, IEpisodeSummary, IEpisodeBody } from '../../../../../void/common/ledgerTypes.js';
 
 /**
  * LedgerRecallService depends on IPersistentContextStore (IndexedDB) and
