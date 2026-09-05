@@ -50,6 +50,7 @@ import { workspaceFilteredThreads } from '../common/chatThreadUtils.js';
 import { getModelCapabilities } from '../common/modelCapabilities.js';
 import { CompactableMessage, ConversationCompactor, createInactivityWatchdog, isContextOverflowError, isRetryableLlmError, renderConversationSummaryMessage } from './conversationCompactor.js';
 import { IContextLedgerService } from './contextLedgerService.js';
+import { ILedgerRecallService } from '../../neuralInverse/browser/context/search/ledgerRecallService.js';
 import { ILedgerAppendInput, IContextUsageReport } from '../common/ledgerTypes.js';
 import { EpisodeSummarizer } from './episodeSummarizer.js';
 import { buildWorkingBrief } from '../common/workingBriefBuilder.js';
@@ -260,7 +261,12 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		let set = this._journaledThisSession.get(threadId)
 		if (!set) { set = new Set(); this._journaledThisSession.set(threadId, set) }
 		set.add(m)
-		this._contextLedgerService.append(threadId, input).catch(() => this._warnLedgerOnce())
+		this._contextLedgerService.append(threadId, input)
+			.then(entry => {
+				// feed the recall index (task M5 phase 3) — best-effort, idle-safe
+				if (entry) void this._recallIndexService?.indexEntry(threadId, entry).catch(() => undefined)
+			})
+			.catch(() => this._warnLedgerOnce())
 	}
 
 	/**
@@ -367,6 +373,9 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 				modelSelection,
 			})
 			await this._contextLedgerService.saveEpisode(episode)
+			// the frozen episode enters the recall index too (its goal/
+			// invariants/rejected terms are the richest search surface)
+			void this._recallIndexService?.indexEpisode(threadId, episode).catch(() => undefined)
 			const brief = buildWorkingBrief({
 				threadId,
 				previousBrief: await this._contextLedgerService.getBrief(threadId),
@@ -407,6 +416,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		@IInstantiationService private readonly _instantiationService: IInstantiationService,
 		@IUserInputRequestService private readonly _userInputRequestService: IUserInputRequestService,
 		@IContextLedgerService private readonly _contextLedgerService: IContextLedgerService,
+		@ILedgerRecallService private readonly _recallIndexService: ILedgerRecallService,
 	) {
 		super()
 		this.state = { allThreads: {}, currentThreadId: null as unknown as string } // default state
