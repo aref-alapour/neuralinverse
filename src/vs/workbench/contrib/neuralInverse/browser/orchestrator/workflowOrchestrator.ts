@@ -69,6 +69,9 @@ export class WorkflowOrchestrator {
 		private readonly settingsService: IVoidSettingsService,
 		private readonly toolRegistry: ToolRegistry,
 		private readonly contextPacker?: import('../context/packer/contextPacker.js').IContextPackerService,
+		// Context Ledger (task M5): forwarded to the executors so journaling and
+		// ledger-based compaction are live even for manually-constructed runs
+		private readonly contextLedgerService?: import('../../void/browser/contextLedgerService.js').IContextLedgerService,
 	) {}
 
 	/**
@@ -299,6 +302,7 @@ export class WorkflowOrchestrator {
 			const executor = new AgentExecutor(
 				this.llmService, this.settingsService, scopedTools, this.contextPacker,
 				toolCache, step.cacheConfig, budgetTracker,
+				this.contextLedgerService,
 			);
 
 			await executor.execute(agent, step, stepRun, priorOutputs, toolCtx, stepInput, cancellation, priorConversation);
