@@ -34,9 +34,17 @@ locally ALSO goes upstream as a clean issue/PR.
 3. **Live-test gate:** a fix is "done" only after the owner tested it on the
    installed app (see Live testing). Source-only = not done.
 4. **Live-patch gate:** every source change ships in the SAME task with its
-   `tools/live-patch.py` port, applied to the installed app (run elevated,
-   verify markers, owner restarts to see it live). A commit without its
-   live-patch port is NOT done.
+   `tools/live-patch.py` port, applied to the installed app (run elevated).
+   "Applied" means **apply green AND `--verify` green** — the script's own
+   acceptance test: `python tools/live-patch.py --verify` must report every
+   patch OK and exit 0 (it checks `new` FIRST — insertion patches keep their
+   `old` visible after applying, so "old is still present" is NOT "not
+   applied"). A bare apply run proves nothing: the old script exited 0 even
+   while skipping every patch, which is how a whole pipeline once went live
+   with zero effect. A commit without its live-patch port + green verify is
+   NOT done. After ANY app update, `--status` tells whether the `.orig`
+   baselines went stale — `--rebaseline` re-adopts them; never let an old
+   `.orig` be written back over a newer install.
 5. Never push to `upstream` directly (its push URL is DISABLEd). All upstream
    contributions go via fork branches + PR. Never force-push shared branches.
 6. Never edit files outside our scope (below) without saying why first.
@@ -74,9 +82,11 @@ locally ALSO goes upstream as a clean issue/PR.
   `out/main.js` (main process) + `product.json` (checksums dropped, version
   stamped from their update API). Write access needs admin elevation.
 - After ANY app update: files are replaced → tell the owner to run the
-  desktop shortcut **"Repatch NeuralInverse.bat"**, then re-verify every
-  patch marker still applies; if a pattern went missing, update the script
-  for the new bundle BEFORE any new work.
+  desktop shortcut **"Repatch NeuralInverse.bat"**, then run
+  `python tools/live-patch.py --status` — if baselines went STALE (app
+  updated), `--rebaseline` first, then apply and `--verify` every patch; if a
+  pattern went missing, update the script for the new bundle BEFORE any new
+  work.
 - To revert everything: `python tools/live-patch.py --revert` (admin).
 - Owner restarts the app to load patches. Known limitation of the
   conversation-memory live patch: two agents running concurrently can mix
@@ -86,9 +96,12 @@ locally ALSO goes upstream as a clean issue/PR.
 
 1. State the task and the file(s) you expect to touch.
 2. Investigate source first (read before editing).
-3. Implement on source; commit locally with a clear English message.
-4. Port to `tools/live-patch.py` (minified patterns), run elevated, verify
-   markers, ask the owner to restart + test.
+3. Implement on source; run `node tools/verify.mjs` — it must be GREEN
+   (type-check slice with the repo's strict options + standalone tests +
+   live-patch sandbox selftest, honest NOT-CHECKED list; task Q5) before
+   committing.
+4. Port to `tools/live-patch.py` (minified patterns), run elevated, then
+   `--verify` green (gate 4), ask the owner to restart + test.
 5. Iterate until the owner approves.
 6. On owner OK: clean branch → push to fork → professional issue/PR on
    upstream → report links. If an issue already covers it, link it.

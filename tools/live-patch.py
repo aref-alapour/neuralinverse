@@ -6,20 +6,46 @@ bundles of the installed app, so we can test without a full VS Code
 build. Run from an elevated (admin) shell.
 
 Usage:
-    python tools/live-patch.py            # apply all patches
-    python tools/live-patch.py --revert   # restore the original bundles
+    python tools/live-patch.py               # apply all patches
+    python tools/live-patch.py --verify      # read-only: is every patch's
+                                             # effect actually in the bundles?
+    python tools/live-patch.py --status      # one-page view: app version,
+                                             # last apply, per-file state
+    python tools/live-patch.py --revert      # restore the original bundles
+    python tools/live-patch.py --rebaseline  # after an app UPDATE: adopt the
+                                             # current files as the new
+                                             # baseline, then re-apply
 
-Safety: backs up each pristine file once to <file>.orig. A patch whose
-pattern is missing is reported (may mean upstream already fixed it, or the
-app updated and patterns changed) — nothing else is modified.
+Safety net (task Q4 - the silent-failure fix):
+    * every patch ends up `applied`, `already` or `missing`; any `missing`
+      prints a summary table and EXITS 1 (the old script exited 0 no matter
+      what, which is how a whole pipeline once went live with zero effect);
+    * an intentional miss is possible: --allow-missing "patch name=reason"
+      records the acknowledgment in the manifest;
+    * after apply, a `.ni-livepatch.json` manifest is written next to the
+      bundles (per-file sha256 before/after, per-patch status, repo commit);
+    * if a file matches neither the manifest's after-hash nor its `.orig`
+      baseline, the app was updated underneath us - apply/revert refuse and
+      point at --rebaseline instead of corrupting the installation;
+    * --verify implements the insertion-patch rule (task Q4): check `new`
+      FIRST. Three patches are insertions whose `new` still contains `old`
+      after applying, so "old is still present" does NOT mean "not applied".
+
+Overrides for testing: --root PATH (or NI_APP_ROOT) targets a sandbox copy
+of resources/app; NI_OFFLINE=1 skips the update-API version stamping.
 """
+import argparse
+import hashlib
 import json
+import os
 import shutil
+import subprocess
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
-APP = Path(r"C:\Program Files\NeuralInverse\resources\app")
+APP = Path(os.environ.get("NI_APP_ROOT", r"C:\Program Files\NeuralInverse\resources\app"))
 BUNDLE = APP / "out/vs/workbench/workbench.desktop.main.js"
 MAINJS = APP / "out/main.js"
 PRODUCT_JSON = APP / "product.json"
@@ -385,7 +411,95 @@ PREPENDS = [
 ]
 
 
-def latest_release_version() -> str | None:
+
+# ─── Expected sites ───────────────────────────────────────────────────────────
+# Expected count of `new` occurrences AFTER a full apply, measured against the
+# pristine .orig bundles (2026-09-05). Note "executor chatMode null": its
+# `new` (`chatMode:null,onText`) ALREADY occurs twice in the pristine bundle —
+# expecting 1 there would false-green a pristine verify.
+# Patch order matters: "executor: provider-format fix" is a two-stage chain
+# whose `old` only exists after "executor chatMode null" replaced its anchor —
+# keep the list order intact.
+PATCH_SITES = [1] * len(PATCHES)
+for _i, (_f, _name, _old, _new) in enumerate(PATCHES):
+    if _name.startswith("executor chatMode null"):
+        PATCH_SITES[_i] = 3  # 2 pre-existing + 1 patched site
+
+# Tracked files (relative to the app root) that the manifest hashes.
+TRACKED_RELPATHS = [
+    "out/vs/workbench/workbench.desktop.main.js",
+    "out/main.js",
+    "product.json",
+    "node_modules/node-fetch/lib/index.js",
+]
+
+MANIFEST_NAME = ".ni-livepatch.json"
+MANIFEST_SCHEMA = 1
+
+
+def _paths(root: Path) -> dict:
+    return {
+        "out/vs/workbench/workbench.desktop.main.js": root / "out/vs/workbench/workbench.desktop.main.js",
+        "out/main.js": root / "out/main.js",
+        "product.json": root / "product.json",
+        "node_modules/node-fetch/lib/index.js": root / "node_modules/node-fetch/lib/index.js",
+    }
+
+
+def _sha256(path: Path) -> "str | None":
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def _manifest_path(root: Path) -> Path:
+    return root / MANIFEST_NAME
+
+
+def _load_manifest(root: Path) -> "dict | None":
+    p = _manifest_path(root)
+    if not p.exists():
+        return None
+    try:
+        m = json.loads(p.read_text(encoding="utf-8-sig"))
+        return m if isinstance(m, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _save_manifest(root: Path, manifest: dict) -> None:
+    p = _manifest_path(root)
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="")
+    tmp.replace(p)
+
+
+def _git_commit() -> str:
+    repo = Path(__file__).resolve().parent.parent
+    try:
+        out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo,
+                             capture_output=True, text=True, timeout=10)
+        return out.stdout.strip() if out.returncode == 0 else "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _app_version(root: Path) -> str:
+    pj = root / "product.json"
+    try:
+        return str(json.loads(pj.read_text(encoding="utf-8-sig")).get("version", "?"))
+    except (OSError, ValueError):
+        return "?"
+
+
+def latest_release_version() -> "str | None":
+    if os.environ.get("NI_OFFLINE"):
+        return None
     try:
         with urllib.request.urlopen(UPDATE_API, timeout=15) as r:
             return json.loads(r.read().decode()).get("version")
@@ -394,23 +508,84 @@ def latest_release_version() -> str | None:
         return None
 
 
+# ─── File states & update detection (task Q4) ────────────────────────────────
+
+def _file_states(root: Path, manifest: "dict | None") -> dict:
+    """pristine | patched | untracked | external | missing, per tracked file.
+
+    patched   — bytes match the manifest's sha256After from the last apply
+    pristine  — bytes match the .orig baseline (unpatched)
+    untracked — no manifest (pre-manifest era or fresh checkout): patched by
+                an earlier run of this tool, or edited; apply will record one
+    external  — manifest EXISTS and bytes match neither: the app updated
+    """
+    paths = _paths(root)
+    states = {}
+    for rel in TRACKED_RELPATHS:
+        f = paths[rel]
+        cur = _sha256(f)
+        if cur is None:
+            states[rel] = "missing"
+            continue
+        after = (manifest or {}).get("files", {}).get(rel, {}).get("sha256After")
+        orig = _sha256(Path(str(f) + ".orig"))
+        if after and cur == after:
+            states[rel] = "patched"
+        elif orig and cur == orig:
+            states[rel] = "pristine"
+        elif manifest is None:
+            states[rel] = "untracked"
+        else:
+            states[rel] = "external"
+    return states
+
+
+def _external_files(states: dict) -> list:
+    return sorted(rel for rel, s in states.items() if s == "external")
+
+
+# ─── Shared patch analysis ────────────────────────────────────────────────────
+
+def _is_insertion(old: str, new: str) -> bool:
+    """True when `new` contains `old` — applying keeps `old` visible (task Q4)."""
+    return bool(old) and old in new
+
+
+def _patch_counts(data: str, old: str, new: str) -> tuple:
+    """(n_new, n_old_standalone): occurrences of `new`, and occurrences of
+    `old` NOT part of an applied `new` (insertions embed `old` inside `new`,
+    so their unapplied count is n_old - n_new)."""
+    n_new = data.count(new)
+    n_old = data.count(old)
+    n_standalone = max(0, n_old - n_new) if _is_insertion(old, new) else n_old
+    return n_new, n_standalone
+
+
+def _read(f: Path) -> str:
+    return f.read_text(encoding="utf-8")
+
+
+def _write(f: Path, data: str) -> None:
+    f.write_text(data, encoding="utf-8", newline="")
+
+
 def backup_once(f: Path) -> None:
     b = f.with_suffix(f.suffix + ".orig")
     if not b.exists():
         shutil.copy2(f, b)
-        print(f"Backup saved: {b.name}")
 
 
-def patch_product_json() -> None:
+def patch_product_json(root: Path) -> list:
     # 1) Drop checksums: patched bundles fail VS Code's core-file integrity
     #    check ("installation appears to be corrupt" dialog).
     # 2) Stamp the marketing version from their update API onto `version`:
     #    their builds never bump it (stays at the VS Code base), which —
     #    together with the updater guard patch — is what stops the endless
     #    "X is available" banner after installing the latest build.
-    if not PRODUCT_JSON.exists():
-        return
-    pdata = json.loads(PRODUCT_JSON.read_text(encoding="utf-8-sig"))
+    product_json = root / "product.json"
+    if not product_json.exists():
+        return []
+    pdata = json.loads(product_json.read_text(encoding="utf-8-sig"))
     changed = []
     if "checksums" in pdata:
         del pdata["checksums"]
@@ -420,56 +595,283 @@ def patch_product_json() -> None:
         pdata["version"] = latest
         changed.append(f"version stamped {latest}")
     if changed:
-        backup_once(PRODUCT_JSON)
-        PRODUCT_JSON.write_text(
+        backup_once(product_json)
+        product_json.write_text(
             json.dumps(pdata, indent="\t", ensure_ascii=False) + "\n",
             encoding="utf-8")
-        print(f"OK    product.json: {'; '.join(changed)}")
+    return changed
+
+
+# ─── Commands ─────────────────────────────────────────────────────────────────
+
+def cmd_apply(root: Path, allow_missing: list) -> int:
+    paths = _paths(root)
+    manifest = _load_manifest(root)
+    states = _file_states(root, manifest)
+    missing_files = [rel for rel, s in states.items() if s == "missing"]
+    if missing_files:
+        for rel in missing_files:
+            print(f"ERROR: file not found: {paths[rel]}")
+        return 1
+    external = _external_files(states)
+    if external:
+        print("ERROR: app files changed outside this tool (app update?) — refusing to patch:")
+        for rel in external:
+            print(f"       {rel}")
+        print("Run `python tools/live-patch.py --rebaseline` to adopt the new files as the")
+        print("baseline, then apply again. (A stale .orig must never be written back over")
+        print("a newer install — task Q4.)")
+        return 2
+
+    allowed = {}
+    for item in allow_missing:
+        if "=" not in item:
+            print(f"ERROR: --allow-missing expects 'patch name=reason', got: {item!r}")
+            return 1
+        name, reason = item.split("=", 1)
+        allowed[name.strip()] = reason.strip()
+
+    sha_before = {rel: _sha256(paths[rel]) for rel in TRACKED_RELPATHS}
+    for rel in TRACKED_RELPATHS:
+        backup_once(paths[rel])
+
+    product_changes = patch_product_json(root)
+    if product_changes:
+        print(f"OK    product.json: {'; '.join(product_changes)}")
     else:
         print("SKIP  product.json: nothing to do")
 
-
-def main() -> int:
-    revert = "--revert" in sys.argv
-    if revert:
-        for f in (BUNDLE, MAINJS, PRODUCT_JSON, NODEFETCH):
-            b = f.with_suffix(f.suffix + ".orig")
-            if b.exists():
-                shutil.copy2(b, f)
-                print(f"Reverted {f.name}")
-        return 0
-
-    files = {p[0] for p in PATCHES} | {p[0] for p in PREPENDS}
-    for f in files:
-        if not f.exists():
-            print(f"ERROR: file not found: {f}")
-            return 1
-        backup_once(f)
-
-    patch_product_json()
+    manifest = {
+        "schema": MANIFEST_SCHEMA,
+        "appVersion": _app_version(root),
+        "repoCommit": _git_commit(),
+        "appliedAt": int(time.time()),
+        "files": {},
+        "patches": [],
+        "prepends": [],
+        "allowedMissing": [],
+    }
 
     # Injected runtime modules first (patches below reference them).
     for f, name, code in PREPENDS:
-        data = f.read_text(encoding="utf-8")
-        if "globalThis.__niC=" in data:
-            print(f"SKIP  {name}: already injected")
+        data = _read(f)
+        sentinel = "globalThis.__niC="
+        if sentinel in data:
+            print(f"ALREADY {name}: sentinel present")
+            manifest["prepends"].append({"name": name, "sentinel": sentinel, "status": "already"})
             continue
-        f.write_text(code + "\n" + data, encoding="utf-8", newline="")
+        _write(f, code + "\n" + data)
         print(f"OK    {name}: injected ({len(code)} chars)")
+        manifest["prepends"].append({"name": name, "sentinel": sentinel, "status": "injected"})
 
-    for f, name, old, new in PATCHES:
-        data = f.read_text(encoding="utf-8")
-        count = data.count(old)
-        if count == 0:
-            already = data.count(new)
-            print(f"SKIP  {name}: pattern not found"
-                  + (" (already applied)" if already else ""))
+    missing = []
+    for (f, name, old, new), sites in zip(PATCHES, PATCH_SITES):
+        data = _read(f)
+        n_new, n_standalone = _patch_counts(data, old, new)
+        if n_standalone == 0 and n_new >= sites:
+            print(f"ALREADY {name}: replacement present ({n_new} site(s))")
+            manifest["patches"].append({"name": name, "sites": n_new, "status": "already"})
             continue
-        f.write_text(data.replace(old, new), encoding="utf-8", newline="")
-        print(f"OK    {name}: {count} site(s) patched")
+        if n_standalone == 0 and n_new == 0:
+            missing.append(name)
+            if name in allowed:
+                print(f"ALLOWED-MISSING {name}: {allowed[name]}")
+                manifest["allowedMissing"].append({"name": name, "reason": allowed[name]})
+                manifest["patches"].append({"name": name, "sites": 0, "status": "allowed-missing"})
+            else:
+                print(f"MISSING {name}: pattern not found in either form")
+            continue
+        # Convert the standalone `old` sites. Insertion patches keep `old`
+        # visible inside an applied `new` — a bare str.replace would rewrite
+        # those too and inject the suffix a SECOND time, so mask applied
+        # sites first (idempotency for insertions).
+        if n_new > 0:
+            import hashlib as _h
+            mask = "\x00NI_MASK_" + _h.sha1(new.encode("utf-8")).hexdigest()[:12]
+            data = data.replace(new, mask).replace(old, new).replace(mask, new)
+        else:
+            data = data.replace(old, new)
+        _write(f, data)
+        print(f"OK    {name}: {n_standalone} site(s) patched")
+        manifest["patches"].append({"name": name, "sites": n_standalone, "status": "applied"})
 
-    print("Done. Restart NeuralInverse to load the patches.")
+    for rel in TRACKED_RELPATHS:
+        manifest["files"][rel] = {
+            "sha256Before": sha_before[rel],
+            "sha256After": _sha256(paths[rel]),
+            "origSha256": _sha256(Path(str(paths[rel]) + ".orig")),
+        }
+    _save_manifest(root, manifest)
+
+    print("-" * 72)
+    applied = sum(1 for p in manifest["patches"] if p["status"] == "applied")
+    already = sum(1 for p in manifest["patches"] if p["status"] == "already")
+    allowed_n = len(manifest["allowedMissing"])
+    hard_missing = len(missing) - allowed_n
+    print(f"summary : {applied} applied, {already} already, "
+          f"{hard_missing} missing, {allowed_n} allowed-missing "
+          f"(of {len(PATCHES)} patches)")
+    if hard_missing > 0:
+        print("A missing patch means the pattern exists in NO form — the bundle changed.")
+        print("Inspect manually; do NOT re-run blindly.")
+        return 1
+    print(f"manifest: {MANIFEST_NAME} written. Restart NeuralInverse to load the patches.")
     return 0
+
+
+def cmd_verify(root: Path) -> int:
+    paths = _paths(root)
+    manifest = _load_manifest(root)
+    states = _file_states(root, manifest)
+
+    rows = []
+    n_ok = n_missing = n_pending = 0
+    for f, name, code in PREPENDS:
+        ok = f.exists() and _read(f).count("globalThis.__niC=") > 0
+        rows.append((("OK      " if ok else "MISSING ") + name,
+                     "sentinel globalThis.__niC= present" if ok else "sentinel globalThis.__niC= NOT found"))
+        n_ok += bool(ok)
+        n_missing += not ok
+    for (f, name, old, new), sites in zip(PATCHES, PATCH_SITES):
+        if not f.exists():
+            rows.append(("MISSING " + name, "target file absent"))
+            n_missing += 1
+            continue
+        n_new, n_standalone = _patch_counts(_read(f), old, new)
+        if n_new >= sites:
+            rows.append(("OK      " + name, f"{n_new} site(s)"))
+            n_ok += 1
+        elif n_new == 0 and n_standalone == 0:
+            rows.append(("MISSING " + name, "pattern not found in either form — bundle drifted or a prerequisite patch is absent"))
+            n_missing += 1
+        else:
+            rows.append(("PENDING " + name, f"{n_new}/{sites} site(s) applied, {n_standalone} not"))
+            n_pending += 1
+
+    for label, detail in rows:
+        print(f"{label:<75} {detail}")
+    print("-" * 72)
+    note = "" if manifest else "  (no manifest — verified purely on pattern presence)"
+    print(f"{n_ok} OK, {n_pending} PENDING, {n_missing} MISSING{note}")
+    external = _external_files(states)
+    if external:
+        print("WARNING: app files changed outside this tool (update?) — see --status / --rebaseline:")
+        for rel in external:
+            print(f"       {rel}")
+    return 0 if (n_missing == 0 and n_pending == 0) else 1
+
+
+def cmd_status(root: Path) -> int:
+    manifest = _load_manifest(root)
+    states = _file_states(root, manifest)
+    print(f"app root     : {root}")
+    print(f"app version  : {_app_version(root)} (product.json)")
+    if manifest:
+        import datetime
+        when = datetime.datetime.fromtimestamp(manifest.get("appliedAt", 0)).isoformat(timespec="seconds")
+        print(f"last apply   : {when}  repo {manifest.get('repoCommit', '?')}  app v{manifest.get('appVersion', '?')}")
+    else:
+        print("last apply   : never (no manifest)")
+    print("files        :")
+    verdicts = {
+        "pristine": "unpatched (matches .orig)",
+        "patched": "matches last apply",
+        "untracked": "patched by an earlier run (no manifest yet) — apply once to record one",
+        "external": "STALE — matches neither .orig nor the last apply (app updated?)",
+        "missing": "FILE NOT FOUND",
+    }
+    for rel in TRACKED_RELPATHS:
+        print(f"  {rel:<60} {verdicts[states[rel]]}")
+    print("patches      : run --verify for the per-patch table")
+    if _external_files(states):
+        print("ACTION       : baselines are stale — run --rebaseline, then apply")
+    return 0
+
+
+def cmd_revert(root: Path) -> int:
+    paths = _paths(root)
+    manifest = _load_manifest(root)
+    states = _file_states(root, manifest)
+    external = _external_files(states)
+    if external:
+        print("ERROR: refusing to revert — these files changed after the last apply")
+        print("       (writing an old .orig over a NEWER install corrupts it):")
+        for rel in external:
+            print(f"       {rel}")
+        print("Run `python tools/live-patch.py --rebaseline` first (it adopts the current")
+        print("files as the new baseline), then decide whether to apply or revert.")
+        return 2
+    for rel in TRACKED_RELPATHS:
+        f = paths[rel]
+        b = Path(str(f) + ".orig")
+        if b.exists():
+            shutil.copy2(b, f)
+            print(f"Reverted {rel}")
+    m = _manifest_path(root)
+    if m.exists():
+        m.unlink()
+        print(f"Removed {MANIFEST_NAME}")
+    return 0
+
+
+def cmd_rebaseline(root: Path) -> int:
+    paths = _paths(root)
+    for rel in TRACKED_RELPATHS:
+        f = paths[rel]
+        b = Path(str(f) + ".orig")
+        if not f.exists():
+            print(f"SKIP  {rel}: file not found")
+            continue
+        shutil.copy2(f, b)
+        print(f"Rebaselined {rel} (.orig = current bytes)")
+    m = _manifest_path(root)
+    if m.exists():
+        m.unlink()
+    print(f"Removed {MANIFEST_NAME}. NOTE: the current files may still contain patches —")
+    print("run --verify to see which are present, and re-apply what you want.")
+    return 0
+
+
+def _rebase(root: Path) -> None:
+    """Point every patch's target file into a --root sandbox (testing).
+
+    PATCHES/PREPENDS bind their file paths at import time against APP; when an
+    explicit --root differs, rewrite those bindings in place.
+    """
+    if root == APP:
+        return
+    def swap(p: Path) -> Path:
+        try:
+            return root / p.relative_to(APP)
+        except ValueError:
+            return p  # not under APP — leave as-is
+    PATCHES[:] = [(swap(f), n, o, nw) for (f, n, o, nw) in PATCHES]
+    PREPENDS[:] = [(swap(f), n, c) for (f, n, c) in PREPENDS]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Live-patch the installed NeuralInverse IDE")
+    parser.add_argument("--verify", action="store_true", help="read-only check that every patch's effect is present")
+    parser.add_argument("--status", action="store_true", help="one-page state view")
+    parser.add_argument("--revert", action="store_true", help="restore .orig baselines")
+    parser.add_argument("--rebaseline", action="store_true", help="adopt current files as the new baseline (after an app update)")
+    parser.add_argument("--allow-missing", action="append", default=[], metavar="NAME=REASON",
+                        help="acknowledge a missing patch, with the reason recorded in the manifest")
+    parser.add_argument("--root", default=None, help="app root override (testing sandbox)")
+    args = parser.parse_args()
+
+    root = Path(args.root) if args.root else APP
+    if root != APP:
+        _rebase(root)
+    if args.verify:
+        return cmd_verify(root)
+    if args.status:
+        return cmd_status(root)
+    if args.revert:
+        return cmd_revert(root)
+    if args.rebaseline:
+        return cmd_rebaseline(root)
+    return cmd_apply(root, args.allow_missing)
 
 
 if __name__ == "__main__":

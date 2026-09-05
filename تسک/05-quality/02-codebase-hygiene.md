@@ -21,9 +21,10 @@
      (فهرست به Q1 وصل است)
    - `getSessionCost()` (با Q1 بسته می‌شود)
    - autocomplete context TODO در `chatThreadService.ts:551`
-5. **بررسی live-patch marker ها:** بعد از هر تغییر source که در `tools/live-patch.py`
-   پورت شده، اسکریپت `--verify` که همه‌ی marker ها هنوز match هستند (بخشی از
-   routine آپدیت که در AGENTS.local.md آمده — ابزارش نبود، بساز)
+5. ~~**بررسی live-patch marker ها**~~ → منتقل شد و کامل اجرا شد در
+   [Q4 — یکپارچگی live-patch](04-live-patch-integrity.md) (ابزار `--verify`
+   + `--status` + `--rebaseline` + manifest + selftest sandbox؛ ۲۰۲۶-۰۹-۰۵
+   سبز). اینجا فقط مرجع می‌ماند؛ هر کاری در آن تسک انجام می‌شود.
 
 ## معیارهای پذیرش
 - [ ] `git ls-files | grep -E '\.bak'` خالی است
