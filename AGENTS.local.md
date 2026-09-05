@@ -1,7 +1,8 @@
-# AGENTS.local.md — NeuralInverse development rules (OUR project rules)
+# AGENTS.local.md — Zoom Code development rules (OUR project rules)
 
-Fork of VS Code / Void. We develop here, test live on the installed app, and
-PR to upstream ONLY after the owner's explicit approval.
+Standalone PRIVATE project (`aref-alapour/zoomcode`; lineage: VS Code / Void /
+NeuralInverse). We develop here and test live on the installed app. Upstream
+contributions are OFF unless the owner explicitly revives them.
 (The root `AGENTS.md` belongs to upstream VS Code — never edit it.)
 
 ## Hard gates (never skip)
@@ -12,22 +13,32 @@ PR to upstream ONLY after the owner's explicit approval.
    ("بفرست", "PR بزن", ...). Until then: commit locally, report, stop.
 2. **Live-test gate:** a fix is "done" only after the owner tested it on the
    installed app (see Live testing). Source-only = not done.
-3. Never push to `upstream` directly. All upstream contributions go via
-   fork branches + PR. Never force-push shared branches.
-4. Never edit files outside our scope (below) without saying why first.
-5. Never print or commit secrets/keys. Persian in chat; issues/PRs/code in
+3. **Live-patch gate (owner rule, 2026-09-05):** EVERY source change ships in
+   the SAME task with its `tools/live-patch.py` port, applied to the installed
+   app (run elevated, verify markers, owner restarts to see it live). A commit
+   without its live-patch port is NOT done — never leave a change
+   source-only "for later".
+4. Never push to `upstream` directly (its push URL is DISABLEd; keep it that
+   way). All upstream contributions, if ever revived, go via a separate
+   public fork + PR. Never force-push shared branches.
+5. Never edit files outside our scope (below) without saying why first.
+6. Never print or commit secrets/keys. Persian in chat; issues/PRs/code in
    English.
 
 ## Remotes & branching
 
-- `origin` → aref-alapour/neuralinverse (fork; PRs come from here)
-- `upstream` → NeuralInverse/neuralinverse (source of truth)
+- `origin` → aref-alapour/zoomcode (**standalone private repo — THE project**;
+  fork badge removed via template regeneration, 2026-09-05)
+- `upstream` → NeuralInverse/neuralinverse (reference only; push URL DISABLEd)
+- Old fork `aref-alapour/neuralinverse` (now private) is an ARCHIVE — it alone
+  holds open upstream PRs #134/#136. Do not push to it.
 - Before new work: `git fetch upstream` and branch from the right base:
   - fixes to files as they exist upstream → branch from `upstream/main`
   - continuation of our unmerged work → branch from our feature branch
-- One concern per branch/PR. Reference the issue (`Fixes #N`).
-- Upstream PR branches must contain ONLY the code change — never our
-  local tooling (`tools/`, `AGENTS.local.md`, `PROMPT-SESSION.md`, `تسک/`).
+- One concern per branch. Reference the issue (`Fixes #N`).
+- If an upstream PR is ever revived: branches must contain ONLY the code
+  change — never our local tooling (`tools/`, `AGENTS.local.md`,
+  `PROMPT-SESSION.md`, `تسک/`).
 
 ## Code scope
 
