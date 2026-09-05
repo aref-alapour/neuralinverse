@@ -42,6 +42,7 @@
 | درک Codebase (semantic retrieval) | ⚠️ موتور هست، نیمه‌وصل | [C1](02-context/01-wire-context-engine.md) + [C6](02-context/06-smart-auto-context.md) | P0→P1 |
 | Repo map هوشمند | ⚠️ درخت ساده | [C5](02-context/05-repo-map-upgrade.md) | P1 |
 | Compaction خودکار با UX | 🟡 موتور عالی، UX صفر | [C7](02-context/07-compaction-ux.md) | **P0** |
+| گفتگوی بی‌پایان بدون فراموشی (تا ۱۰M+) | ❌ خلاصه بازنویسی می‌شود، بایگانی غیرقابل‌بازیابی | [M5](01-memory/05-context-ledger.md) | **P0** |
 | Background Agents (تسک → PR) | ⚠️ git آماده، **LLM وصل نیست** | [A1](03-agent-parity/01-background-agents-loop.md) | **P0** |
 | Checkpoints (restore فایل) | ⚠️ فقط ایندکس پیام | [A3](03-agent-parity/03-file-checkpoints.md) | P1 |
 | سطح‌های auto-run / مجوز واحد | ⚠️ سه مدل پراکنده؛ executor بدون تأیید | [A4](03-agent-parity/04-unified-permissions.md) | P1 |
@@ -72,9 +73,12 @@ compaction ای که از نظر الگوریتم جلوتر است.
 5. **Q2** بهداشت کدبیس + ابزار `live-patch --verify`
 
 ### دسته‌ی ۲ — حافظه (قلب استراتژی؛ ادامه‌ی branch فعلی)
-6. **M1** ماندگاری گفتگوها (ادامه‌ی `feat/agent-conversation-memory`)
-7. **M2** بازیابی برداری حافظه (با fallback واژگانی — سازگار BYOLLM)
-8. **M3** ثبت خودکار + تلفیق + UI مدیریت
+> **ستون فقرات این دسته [M5](01-memory/05-context-ledger.md) است.** M1 (ماندگاری) در فاز ۰/۵
+> آن حل می‌شود و M2 (بازیابی) روی ایندکس فاز ۳ سوار می‌شود. M5 را قبل از M1/M2 شروع کن،
+> وگرنه دو بار ذخیره‌سازی می‌نویسیم.
+6. **M5** Context Ledger — بایگانی append-only + اپیزودهای تغییرناپذیر + brief + recall
+7. **M2** بازیابی برداری حافظه‌ی پایدار (روی ایندکس مشترک M5-فاز۳؛ fallback واژگانی)
+8. **M3** ثبت خودکار + تلفیق + UI مدیریت (تغذیه از `invariants`/`corrections` اپیزودها)
 
 ### دسته‌ی ۳ — اتکای agent
 9. **A1** وصل کردن LLM به background agents (مهم‌ترین feature خالی)
@@ -147,7 +151,8 @@ compaction ای که از نظر الگوریتم جلوتر است.
 
 | تسک | وضعیت | شاخه (branch) | یادداشت |
 |---|---|---|---|
-| M1 | 🟡 | `feat/agent-conversation-memory` | ادامه‌ی کار جاری |
+| M5 | 🔴 | `feat/context-ledger` (پیشنهادی) | ستون فقرات حافظه/context — M1 و بخشی از M2/C7/F2 را می‌بلعد |
+| M1 | 🟡 | `feat/agent-conversation-memory` | در فاز ۰ و ۵ از M5 حل می‌شود |
 | بقیه | 🔴 | — | — |
 
 ## Definition of Done (برای هر تسک)
