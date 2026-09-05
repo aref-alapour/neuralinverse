@@ -34,3 +34,9 @@ src/vs/workbench/contrib/void/browser/react/out/**
 src/vs/workbench/contrib/void/browser/react/src2/**
 
 memory/
+
+# AI-landscape research clones (research only, not part of the build)
+/projects/
+
+# python bytecode
+tools/__pycache__/
