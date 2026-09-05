@@ -328,6 +328,32 @@ PATCHES = [
      "mcp: surface real Error messages instead of {}",
      '}else typeof s=="string"?r=s:r=JSON.stringify(s,null,2);',
      '}else if(s instanceof Error)r=s.message||String(s);else typeof s=="string"?r=s:r=JSON.stringify(s,null,2);'),
+    # ── fix(oss-tools): the 3000-char tool-result cap made file reads ──────
+    # unfinishable (editor-tools audit 2026-09-05, session 2). read_file
+    # serves whole pages and reports hasNextPage itself; the wrapper cut
+    # mid-file with no paging hint, so models paged forward into empty reads
+    # and retried for half an hour. Cap now matches capToolResult (24k) and
+    # the marker says exactly what was held back.
+    # Source: progressFeedbackLoop.wrapToolResultForOSS.
+    (BUNDLE,
+     "oss-tools: honest 24k tool-result preview instead of silent 3k cut",
+     'o=t.length>3e3?t.substring(0,3e3)+`\n[... output truncated ...]`:t;',
+     'o=t.length>24e3?t.substring(0,24e3)+`\n[... output truncated: showing first 24,000 of ${t.length} chars — use grep/search_in_file for the rest]`:t;'),
+    # ── fix(oss-tools): an empty read_file page rendered an empty code ─────
+    # fence — now it says explicitly the page is beyond end of file.
+    # Source: toolsService.stringOfResult.read_file.
+    (BUNDLE,
+     "oss-tools: read_file empty page gets an explicit end-of-file message",
+     'read_file:(me,Y)=>`${me.uri.fsPath}\n\\`\\`\\`\n${Y.fileContents}\n\\`\\`\\`${Le(Y.hasNextPage)}${Y.hasNextPage?`\nMore info because truncated: this file has ${Y.totalNumLines} lines, or ${Y.totalFileLen} characters.`:""}`',
+     'read_file:(me,Y)=>Y.fileContents===""&&((me.pageNumber??1)>1)`${me.uri.fsPath}\n(no more content — page ${me.pageNumber} is beyond the end of this ${Y.totalNumLines}-line file)`:`${me.uri.fsPath}\n\\`\\`\\`\n${Y.fileContents}\n\\`\\`\\`${Le(Y.hasNextPage)}${Y.hasNextPage?`\nMore info because truncated: this file has ${Y.totalNumLines} lines, or ${Y.totalFileLen} characters.`:""}`'),
+    # ── fix(oss-tools): absolute paths OUTSIDE the workspace (git worktrees)─
+    # failed with "No contents; File does not exist." although the file was
+    # on disk — the text-model service only tracks workspace files. Fall back
+    # to a raw fileService read (read-only). Source: toolsService read_file.
+    (BUNDLE,
+     "oss-tools: read_file raw-read fallback for out-of-workspace paths",
+     'read_file:async({uri:me,startLine:Y,endLine:le,pageNumber:De})=>{await o.initializeModel(me);const{model:xe}=await o.getModelSafe(me);if(xe===null)throw new Error("No contents; File does not exist.");let Je;if(Y===null&&le===null)Je=xe.getValue(1);else{const Ci=Y===null?1:Y,_i=le===null?xe.getLineCount():le;Je=xe.getValueInRange({startLineNumber:Ci,startColumn:1,endLineNumber:_i,endColumn:Number.MAX_SAFE_INTEGER},1)}const bt=xe.getLineCount(),st=jZ*(De-1),et=jZ*De-1,At=Je.slice(st,et+1),ei=Je.length-1-et>=1,Ne=Je.length;return{result:{fileContents:At,totalFileLen:Ne,hasNextPage:ei,totalNumLines:bt}}}',
+     'read_file:async({uri:me,startLine:Y,endLine:le,pageNumber:De})=>{try{await o.initializeModel(me)}catch(_e0){}const{model:xe}=await o.getModelSafe(me);let Je,bt;if(xe===null){if(me.scheme!=="file")throw new Error("No contents; File does not exist.");let _raw;try{_raw=(await e.readFile(me)).value.toString()}catch(_e2){throw new Error("No contents; File does not exist. ("+((_e2&&_e2.message)||_e2)+")")}const _ls=_raw.split(`\n`),_s=Y===null?1:Y,_t=le===null?_ls.length:le;Je=_ls.slice(_s-1,_t).join(`\n`),bt=_ls.length}else if(Y===null&&le===null)Je=xe.getValue(1),bt=xe.getLineCount();else{const Ci=Y===null?1:Y,_i=le===null?xe.getLineCount():le;Je=xe.getValueInRange({startLineNumber:Ci,startColumn:1,endLineNumber:_i,endColumn:Number.MAX_SAFE_INTEGER},1),bt=xe.getLineCount()}const st=jZ*(De-1),st=jZ*(De-1),et=jZ*De-1,At=Je.slice(st,et+1),ei=Je.length-1-et>=1,Ne=Je.length;return{result:{fileContents:At,totalFileLen:Ne,hasNextPage:ei,totalNumLines:bt}}}'),
 ]
 
 # Injected runtime module: the ConversationCompactor port (opencode-style
