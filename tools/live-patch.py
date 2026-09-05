@@ -354,6 +354,38 @@ PATCHES = [
      "oss-tools: read_file raw-read fallback for out-of-workspace paths",
      'read_file:async({uri:me,startLine:Y,endLine:le,pageNumber:De})=>{await o.initializeModel(me);const{model:xe}=await o.getModelSafe(me);if(xe===null)throw new Error("No contents; File does not exist.");let Je;if(Y===null&&le===null)Je=xe.getValue(1);else{const Ci=Y===null?1:Y,_i=le===null?xe.getLineCount():le;Je=xe.getValueInRange({startLineNumber:Ci,startColumn:1,endLineNumber:_i,endColumn:Number.MAX_SAFE_INTEGER},1)}const bt=xe.getLineCount(),st=jZ*(De-1),et=jZ*De-1,At=Je.slice(st,et+1),ei=Je.length-1-et>=1,Ne=Je.length;return{result:{fileContents:At,totalFileLen:Ne,hasNextPage:ei,totalNumLines:bt}}}',
      'read_file:async({uri:me,startLine:Y,endLine:le,pageNumber:De})=>{try{await o.initializeModel(me)}catch(_e0){}const{model:xe}=await o.getModelSafe(me);let Je,bt;if(xe===null){if(me.scheme!=="file")throw new Error("No contents; File does not exist.");let _raw;try{_raw=(await e.readFile(me)).value.toString()}catch(_e2){throw new Error("No contents; File does not exist. ("+((_e2&&_e2.message)||_e2)+")")}const _ls=_raw.split(`\n`),_s=Y===null?1:Y,_t=le===null?_ls.length:le;Je=_ls.slice(_s-1,_t).join(`\n`),bt=_ls.length}else if(Y===null&&le===null)Je=xe.getValue(1),bt=xe.getLineCount();else{const Ci=Y===null?1:Y,_i=le===null?xe.getLineCount():le;Je=xe.getValueInRange({startLineNumber:Ci,startColumn:1,endLineNumber:_i,endColumn:Number.MAX_SAFE_INTEGER},1),bt=xe.getLineCount()}const st=jZ*(De-1),st=jZ*(De-1),et=jZ*De-1,At=Je.slice(st,et+1),ei=Je.length-1-et>=1,Ne=Je.length;return{result:{fileContents:At,totalFileLen:Ne,hasNextPage:ei,totalNumLines:bt}}}'),
+    # ── fix(oss-agent): asking a QUESTION about the task resumed the task ──
+    # (owner report 2026-09-05). The layer-3 auto-retry treats any text-only
+    # response in agent mode as "narrating instead of acting"; an ANSWER to a
+    # question mentions paths/commands and trips those heuristics, so the
+    # harness injected "STOP. Act now." and forced the finished task to
+    # continue. shouldAutoRetry now takes a context: when no tool has run in
+    # this agent run and the user's message is a question (EN/FA), the text
+    # answer is legitimate and no retry fires. Source:
+    # ossModelEnhancement/autoRetryCorrection.ts + chatThreadService.
+    (BUNDLE,
+     "oss-agent: shouldAutoRetry accepts question-context (guard)",
+     'function mFn(i,e,t,n){if(n>=_vi||e>0||!xvi.has(t)||i.length<20)return!1;if(i.includes(',
+     'function mFn(i,e,t,n,r){var u;if(n>=_vi||e>0||!xvi.has(t)||i.length<20)return!1;if(r&&r.toolsExecutedThisRun===!1&&r.userMessage&&(u=r.userMessage.trim())&&(/[?؟]\\s*$/.test(u)||/^\\s*(how|what|why|when|where|who|which|whose|is|are|was|were|do|does|did|can|could|would|should|has|have|had|will)\x08/i.test(u)||/^\\s*(چرا|چطور|چگونه|چقدر|چند|آیا|کجا|کدام|کی)\\s/.test(u)))return!1;if(i.includes('),
+    (BUNDLE,
+     "oss-agent: run head captures the user message and resets the tools-run flag",
+     'let S="",C=0,x=[],E=0,D={};if(s){const{interrupted:k}=await this._runToolCall(',
+     'let S="",C=0,x=[],E=0,D={};this._niToolsRun=!1;const Nq1=(this.state.allThreads[e]?.messages??[]).filter(Y=>"user"===Y.role).pop()?.content??null;if(s){const{interrupted:k}=await this._runToolCall('),
+    (BUNDLE,
+     "oss-agent: tool branch sets the tools-run flag",
+     'de&&de.length>0){const _e=this._mcpService.getMCPTools();let te=!1,ge=!1;',
+     'de&&de.length>0){this._niToolsRun=!0;const _e=this._mcpService.getMCPTools();let te=!1,ge=!1;'),
+    (BUNDLE,
+     "oss-agent: retry check passes question-context",
+     'if(mFn(ne.fullText,0,c,te)){',
+     'if(mFn(ne.fullText,0,c,te,{userMessage:Nq1,toolsExecutedThisRun:this._niToolsRun})){'),
+    # ── fix(oss-agent): the continuation prompt baked into stored tool ──────
+    # results was an unconditional imperative — it kept pushing the model to
+    # resume even after the user asked something. Scope it now.
+    (BUNDLE,
+     "oss-agent: continuation prompt defers to the user's latest message",
+     'Tool succeeded. Continue with the next step using XML tool calls. Do NOT output markdown or explanations.',
+     "Tool succeeded. Continue with the next step using XML tool calls. Do NOT output markdown or explanations. (If the user's latest message is a question, answer it in text instead — resume this task only when asked.)"),
 ]
 
 # Injected runtime module: the ConversationCompactor port (opencode-style

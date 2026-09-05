@@ -1152,6 +1152,11 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		let _consecutiveNoProgressRounds = 0 // track rounds where all tool calls fail (no forward progress)
 		let _sameToolNameAttempts: Record<string, number> = {} // track repeated calls to same tool name
 		let _didOverflowRecovery = false // one context-overflow compaction per agent run
+		// the user message that started this run — the OSS auto-retry layer must
+		// not "correct" a text answer when the user asked a QUESTION (it used to
+		// resume the finished task right after answering)
+		const _runUserMessage = findLast(this._allThreads[threadId]?.messages ?? [], m => m.role === 'user')?.content ?? null
+		let _toolsExecutedThisRun = false
 
 		// before enter loop, call tool
 		if (callThisToolFirst) {
@@ -1386,6 +1391,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 				// call tools if there are any
 				if (toolCalls && toolCalls.length > 0) {
 					const mcpTools = this._mcpService.getMCPTools()
+					_toolsExecutedThisRun = true
 
 					let anyInterrupted = false;
 					let anyAwaitingUserApproval = false;
@@ -1508,7 +1514,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 				else if (info.fullText && modelSelection && needsOSSEnhancement(modelSelection.providerName, modelSelection.modelName)) {
 					const _ossRetryKey = `_ossRetry_${threadId}`;
 					const retryCount = ((this as any)[_ossRetryKey] || 0) as number;
-					if (shouldAutoRetry(info.fullText, 0, chatMode, retryCount)) {
+					if (shouldAutoRetry(info.fullText, 0, chatMode, retryCount, { userMessage: _runUserMessage, toolsExecutedThisRun: _toolsExecutedThisRun })) {
 						(this as any)[_ossRetryKey] = retryCount + 1;
 						const correction = getCorrectionMessage(retryCount, info.fullText);
 						this._addMessageToThread(threadId, { role: 'user', content: correction, displayContent: '', selections: null, state: defaultMessageState });

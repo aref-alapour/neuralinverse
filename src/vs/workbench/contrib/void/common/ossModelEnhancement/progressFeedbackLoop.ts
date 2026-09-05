@@ -56,7 +56,7 @@ export function wrapToolResultForOSS(
 		} else if (toolName === 'edit') {
 			continuationPrompt = 'Edit applied. Continue with next changes or verify by running the code. Use tool calls only.';
 		} else {
-			continuationPrompt = 'Tool succeeded. Continue with the next step using XML tool calls. Do NOT output markdown or explanations.';
+			continuationPrompt = 'Tool succeeded. Continue with the next step using XML tool calls. Do NOT output markdown or explanations. (If the user\'s latest message is a question, answer it in text instead — resume this task only when asked.)';
 		}
 	} else {
 		if (toolName === 'bash') {
