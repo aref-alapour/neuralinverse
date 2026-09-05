@@ -124,6 +124,15 @@ def main() -> int:
         check("manifest hashes all four files", set(m.get("files", {}).keys()) == set(PRISTINE.keys()))
         check("manifest recorded the repo commit", m.get("repoCommit") not in (None, ""))
 
+        # A patch that applies cleanly can still be BROKEN JavaScript — a single
+        # syntax error kills the whole bundle and the app shows a black screen
+        # (happened 2026-09-05 with a duplicated const declaration). Pattern
+        # presence is NOT enough: the patched bundles must PARSE.
+        for rel in ("out/vs/workbench/workbench.desktop.main.js", "out/main.js"):
+            r_check = subprocess.run(["node", "--check", str(root / rel)], capture_output=True, text=True)
+            check(f"patched {rel.split('/')[-1]} parses (node --check)", r_check.returncode == 0,
+                  (r_check.stderr or "")[-300:])
+
         print("scenario 3: --verify after apply → all OK, insertion patches included")
         r = run(root, "--verify")
         check("exit code is 0", r.returncode == 0, r.stdout[-400:])
