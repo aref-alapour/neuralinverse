@@ -34,6 +34,16 @@ REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "tools" / "live-patch.py"
 REAL_APP = Path(r"C:\Program Files\NeuralInverse\resources\app")
 
+# patch counts come from the module itself so the selftest stays valid as
+# PATCHES/PREPENDS grow
+import importlib.util
+_spec = importlib.util.spec_from_file_location("lp", SCRIPT)
+_lp = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_lp)
+N_PATCHES = len(_lp.PATCHES)
+N_PREPENDS = len(_lp.PREPENDS)
+N_TOTAL = N_PATCHES + N_PREPENDS  # verify counts prepends + patches
+
 PRISTINE = {
     "out/vs/workbench/workbench.desktop.main.js": REAL_APP / "out/vs/workbench/workbench.desktop.main.js.orig",
     "out/main.js": REAL_APP / "out/main.js.orig",
@@ -90,7 +100,10 @@ def main() -> int:
         r = run(root, "--verify")
         check("exit code is 1", r.returncode == 1, f"got {r.returncode}")
         check("__niC module reported MISSING", "MISSING conversation-compactor" in r.stdout, r.stdout[-400:])
-        check("unapplied patches are PENDING, not MISSING", "PENDING" in r.stdout and "28 PENDING" in r.stdout, r.stdout[-200:])
+        # on a pristine copy every patch is PENDING except the two-stage
+        # "provider-format fix" (its old only exists after "chatMode null")
+        check("unapplied patches are PENDING, not MISSING",
+              "PENDING" in r.stdout and f"{N_PATCHES - 1} PENDING" in r.stdout, r.stdout[-200:])
 
         print("scenario 2: apply on pristine → exit 0 + manifest")
         r = run(root)
@@ -99,14 +112,14 @@ def main() -> int:
         manifest = root / ".ni-livepatch.json"
         check("manifest written", manifest.exists())
         m = json.loads(manifest.read_text(encoding="utf-8-sig"))
-        check("manifest has 29 patch records", len(m.get("patches", [])) == 29)
+        check(f"manifest has {N_PATCHES} patch records", len(m.get("patches", [])) == N_PATCHES)
         check("manifest hashes all four files", set(m.get("files", {}).keys()) == set(PRISTINE.keys()))
         check("manifest recorded the repo commit", m.get("repoCommit") not in (None, ""))
 
         print("scenario 3: --verify after apply → all OK, insertion patches included")
         r = run(root, "--verify")
         check("exit code is 0", r.returncode == 0, r.stdout[-400:])
-        check("30 OK, nothing missing/pending", "30 OK, 0 PENDING, 0 MISSING" in r.stdout, r.stdout[-200:])
+        check(f"{N_TOTAL} OK, nothing missing/pending", f"{N_TOTAL} OK, 0 PENDING, 0 MISSING" in r.stdout, r.stdout[-200:])
         for insertion in ("track finish_reason", "say why a run finished", "populate the field"):
             check(f"insertion patch '{insertion}…' is OK (not a false alarm)",
                   any(line.startswith("OK") and insertion in line for line in r.stdout.splitlines()))
@@ -114,7 +127,7 @@ def main() -> int:
         print("scenario 4: idempotent re-apply")
         r = run(root)
         check("exit code is 0", r.returncode == 0, r.stdout[-400:])
-        check("everything already applied", "0 applied, 30 already" in r.stdout or "29 already" in r.stdout, r.stdout[-200:])
+        check("everything already applied", f"0 applied, {N_PATCHES} already" in r.stdout, r.stdout[-200:])
 
         print("scenario 5: corrupted pattern → apply exits 1; --allow-missing acknowledges")
         root2 = make_sandbox(tmp)
@@ -150,7 +163,7 @@ def main() -> int:
         check("manifest removed by rebaseline", not (root3 / ".ni-livepatch.json").exists())
         r = run(root3, "--verify")
         check("verify still sees the patches present after rebaseline",
-              r.returncode == 0 and "30 OK" in r.stdout, r.stdout[-300:])
+              r.returncode == 0 and f"{N_TOTAL} OK" in r.stdout, r.stdout[-300:])
         r = run(root3, "--revert")
         check("revert works again after rebaseline", r.returncode == 0, r.stdout[-300:])
 

@@ -311,6 +311,16 @@ PATCHES = [
      "updater: skip update whose version matches installed version",
      'return!i||!i.url||!i.version||!i.productVersion?(this.setState(_e.Idle(s)),Promise.resolve(null)):s===1?(',
      'return!i||!i.url||!i.version||!i.productVersion||i.version===this.productService.version?(this.setState(_e.Idle(s)),Promise.resolve(null)):s===1?('),
+    # ── fix(mcp): tool-call errors serialized to {} — the real message was ──
+    # swallowed. _safeCallTool stringified plain Errors with JSON.stringify,
+    # which is ALWAYS "{}" for Error (message/stack are non-enumerable), so
+    # every server-side tool failure (e.g. "Cortex API error 404: …") surfaced
+    # as an undebuggable empty object in the chat (editor-tools audit
+    # 2026-09-05). Source fix: mcpChannel._safeCallTool.
+    (MAINJS,
+     "mcp: surface real Error messages instead of {}",
+     '}else typeof s=="string"?r=s:r=JSON.stringify(s,null,2);',
+     '}else if(s instanceof Error)r=s.message||String(s);else typeof s=="string"?r=s:r=JSON.stringify(s,null,2);'),
 ]
 
 # Injected runtime module: the ConversationCompactor port (opencode-style
