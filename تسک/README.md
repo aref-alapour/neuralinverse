@@ -4,8 +4,23 @@
 > و `AGENTS.local.md`). هر تسک یک فایل مستقل با طرح پیاده‌سازی و معیار پذیرش است.
 >
 > قانون طلایی هر تسک (از `AGENTS.local.md`): پیاده‌سازی روی source → commit محلی →
-> پورت به `tools/live-patch.py` → تست owner روی نسخه‌ی نصبی → (اختیاری، فقط با
-> تأیید صریح owner) PR به upstream.
+> پورت به `tools/live-patch.py` → تست owner روی نسخه‌ی نصبی → **با اوکی owner،
+> همان کار به‌صورت branch تمیز + issue/PR حرفه‌ای به upstream هم می‌رود.**
+
+## ⚖️ قانون لایسنس / Clean-room (۲۰۲۶-۰۹-۰۵ — الزامی، همه‌ی تسک‌ها)
+
+پروژه بین‌المللی می‌شود و با upstream همکاری عمومی داریم؛ پس برای **هر پروژه‌ی
+لایسنس‌دارِ بیرونی** (freebuff/Codebuff — Apache-2.0؛ ComfyUI — GPL-3.0؛ و هر
+منبع دیگر):
+
+- **فقط می‌خوانیم:** کدشان را برای فهمیدن طراحی می‌خوانیم و **ایده** می‌گیریم.
+- **هرگز عیناً کپی نمی‌کنیم:** نه کپی مستقیم، نه «پورت نزدیک‌به-عیناً»، نه هدر
+  provenance، نه ترجمه‌ی مکانیکی خط‌به‌خط. خروجی باید کاملاً کدِ خودمان باشد —
+  با معماری، نام‌گذاری و ساختار خودمان.
+- **بدون dependency:** از آن پروژه‌ها هیچ وابستگی runtime اضافه نمی‌شود.
+- نتیجه: هیچ آلودگی لایسنسی وارد upstream نمی‌شود و همه‌چیز قابل PR عمومی است.
+- جاهایی که در فایل‌های F/G عبارت «پورت کن» آمده، از این پس یعنی:
+  **«طرح را از منبع بفهم، native و از صفر با سبک خودمان پیاده کن».**
 
 ## مقیاس‌ها
 
@@ -75,8 +90,10 @@ compaction ای که از نظر الگوریتم جلوتر است.
 16. **A5** plan mode → **A6** planner/worker → **E2** skills/hooks → **E3** CLI →
     **M4** docs indexing → **Q3** یکپارچه‌سازی سه stack (با توافق upstream)
 
-### دسته‌ی ۶ — پورت‌های freebuff (الگوهای راستی‌آزمایی‌شده از Codebuff)
+### دسته‌ی ۶ — الگوهای freebuff (راستی‌آزمایی‌شده از Codebuff)
 > کاتالوگ کامل + اصلاحات گزارش handoff: [`06-freebuff/README.md`](06-freebuff/README.md).
+> **قانون clean-room اعمال شده:** تحلیل و مپینگ معتبرند؛ پیاده‌سازی فقط ایده‌محور
+> و از صفر (بدون کپی کد — Apache-2.0).
 > جای‌گذاری در دسته‌ها: F1 (ابزار ویرایش قطعی) کنار ابزارهای دسته‌ی ۳؛
 > F2 (compaction مکانیکی) هم‌زمان با C7؛ F3-الف/ب (بهداشت پیام/بازیابی stream) قبل
 > از هر کار طولانی روی executor؛ F4 (knowledge files + LESSONS + skills سازگار)
@@ -90,11 +107,12 @@ compaction ای که از نظر الگوریتم جلوتر است.
 22. **F6** سخت‌سازی ترمینال (POSIX/nul/clamp) + کانال XML-in-stream
 23. **F7** eval harness (پورت BuffBench با داور دوگانه و runner رقبا)
 
-### دسته‌ی ۷ — پورت‌های موتور گراف ComfyUI (Track A: engine، Track B: embed)
-> کاتالوگ + اصلاحات handoff + قواعد provenance: [`07-comfyui/README.md`](07-comfyui/README.md).
-> ممیزی Wave 0 انجام شده (پیشنهاد: side-by-side + adapter). کل `workflow-engine/`
-> به‌دلیل منشأ GPL-3.0 **fork-only** است و هرگز وارد PR های upstream نمی‌شود.
-24. **G0** تصمیم extend-vs-replace + اسکلت `workflow-engine/` + PORTED-FROM.md
+### دسته‌ی ۷ — موتور گراف ComfyUI (Track A: engine، Track B: embed)
+> کاتالوگ + اصلاحات handoff + قواعد clean-room: [`07-comfyui/README.md`](07-comfyui/README.md).
+> ممیزی Wave 0 انجام شده (پیشنهاد: side-by-side + adapter). با قانون clean-room،
+> `workflow-engine/` **پیاده‌سازی کاملاً خودمان** خواهد بود — بدون کپی GPL، بدون
+> محدودیت fork-only، و قابل PR به upstream.
+24. **G0** تصمیم extend-vs-replace + اسکلت `workflow-engine/`
 25. **G1** فرمت گراف + DynamicGraph (ephemeral با پیشوند deterministic)
 26. **G2** موتور validation با NodeErrors ساخت‌یافته (تاکسونومی کامل ۱۴ رشته‌ای)
 27. **G3** اجرای توپولوژیک + re-staging واحد (lazy/async/subgraph از یک مسیر)
@@ -105,12 +123,10 @@ compaction ای که از نظر الگوریتم جلوتر است.
 32. **G8** اختیاری‌ها: jobs، history، node-replacement، نود API با قیمت زنده، بهداشت secret
 33. **G9** (Track B، مستقل) اجرای خود ComfyUI به‌عنوان سرویس لوکال برای تولید تصویر
 
-**قاعده‌ی پورت ComfyUI:** هدر provenance + `PORTED-FROM.md` + commit مبنا؛ کل
-`workflow-engine/` fork-only (GPL). قبل از پورت هر ماژول، لاگ upstream چک شود.
-
-**قانون پورت freebuff:** فقط کپی/تطبیق با attribution (هدر + `ThirdPartyNotices.txt`)،
-هرگز dependency؛ منطق، نه import (Bun/Zod با layering ما نمی‌خواند). درس معماری:
-loop ساده پیش‌فرض (base3)، sub-agent فقط opt-in.
+**قانون clean-room (جایگزین قوانین پورت قدیمی):** هیچ کدی از comfyui/freebuff یا
+هر منبع لایسنس‌دار دیگری عیناً کپی نمی‌شود — فقط خواندن و ایده‌گیری؛ پیاده‌سازی
+از صفر با معماری خودمان (بخش «⚖️ قانون لایسنس» بالای همین فایل). لاگ upstream
+قبل از طراحی چک شود (`git -C C:/Users/jobal/dev/comfyui log --oneline -5 -- <path>`).
 
 ## وابستگی‌های کلیدی
 
