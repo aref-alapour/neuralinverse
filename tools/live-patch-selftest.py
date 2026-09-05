@@ -30,6 +30,14 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Windows consoles default to cp1252, which cannot encode the arrows and box
+# characters this script prints — the run then dies mid-scenario with a
+# UnicodeEncodeError that looks like a patch failure. Force UTF-8 on our own
+# streams so the output is readable however the script is invoked.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "tools" / "live-patch.py"
 REAL_APP = Path(r"C:\Program Files\NeuralInverse\resources\app")

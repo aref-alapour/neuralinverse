@@ -45,6 +45,13 @@ import time
 import urllib.request
 from pathlib import Path
 
+# The elevated console this runs in is usually cp1252, which cannot encode the
+# non-ASCII characters in our status output. Without this, a patch run can die
+# with a UnicodeEncodeError part-way through — the worst possible moment.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 APP = Path(os.environ.get("NI_APP_ROOT", r"C:\Program Files\NeuralInverse\resources\app"))
 BUNDLE = APP / "out/vs/workbench/workbench.desktop.main.js"
 MAINJS = APP / "out/main.js"
