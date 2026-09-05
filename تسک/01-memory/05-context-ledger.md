@@ -306,7 +306,10 @@ expand_history({ fromSeq, toSeq })   // سقف RECALL_MAX_TOKENS، بریدن ا
   - نوشتن append با صف و flush هر ۳۰۰ms یا ۶۴KB (هرکدام اول)؛ چرخش فایل؛ blob برای غول‌ها
   - قفل چندپنجره‌ای: `meta.json` + `lastSeq` با compare-and-set؛ در تعارض، seq از فایل بازخوانی می‌شود
 - اتصال نوشتن از `chatThreadService._addMessageToThread` و مسیر tool result — **فقط نوشتن**؛ مسیر خواندن دست‌نخورده
-- مهاجرت یک‌باره: threadهای موجود از `THREAD_STORAGE_KEY` به journal ریخته می‌شوند (`migratedAt` در meta)
+- مهاجرت یک‌باره: threadهای موجود از `THREAD_STORAGE_KEY` به journal **کپی** می‌شوند
+  (`migratedAt` در meta). مهاجرت فقط-کپی است و `THREAD_STORAGE_KEY` دست‌نخورده می‌ماند تا
+  وقتی flag پیش‌فرض روشن بماند و owner تأیید کند — این تنها راهی است که تضمین
+  «flag=off ⇒ رفتار دقیقاً امروز» در فاز ۲ معنا پیدا کند
 - ✅ خروجی قابل تست: `.inverse/ledger/<id>/journal/000001.jsonl` پر می‌شود و IDE کند نمی‌شود
 
 ### فاز ۱ — اپیزودها
@@ -344,10 +347,10 @@ expand_history({ fromSeq, toSeq })   // سقف RECALL_MAX_TOKENS، بریدن ا
 
 ## ۸. اعداد هدف
 
-- گفتگوی ۱۰M توکنی ≈ ۱۲۰ اپیزود × ۸۰k؛ هر اپیزود ~۹۰۰ توکن ⇒ brief خام ~۱۰۸k ⇒ بعد از
-  ادغام قطعی و سقف‌ها: **~۳-۴k توکن**
+- گفتگوی ۱۰M توکنی ≈ ۱۶۷ اپیزود × ۶۰k (طبق `EPISODE_TARGET_TOKENS`)؛ هر اپیزود ~۹۰۰ توکن
+  ⇒ brief خام ~۱۵۰k ⇒ بعد از ادغام قطعی و سقف‌ها: **~۳-۴k توکن**
 - payload هر نوبت: `system(~10k) + brief(4k) + recalled(≤8k) + tail(≤40k)` ⇒ **زیر ۶۰k و ثابت**
-- هزینه‌ی خلاصه‌سازی: **یک LLM call به‌ازای هر ~۶۰k توکن** (۱۲۰ call در کل عمر گفتگوی ۱۰M)
+- هزینه‌ی خلاصه‌سازی: **یک LLM call به‌ازای هر ~۶۰k توکن** (~۱۶۷ call در کل عمر گفتگوی ۱۰M)
 - مصرف دیسک: ۴۰MB journal + ~۵۰۰KB اپیزودها + ایندکس
 
 ---
