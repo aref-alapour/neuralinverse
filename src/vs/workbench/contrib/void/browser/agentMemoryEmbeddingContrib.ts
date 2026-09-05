@@ -17,12 +17,14 @@ import { Disposable } from '../../../../base/common/lifecycle.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { IAgentMemoryService } from './agentMemoryService.js';
 import { IEmbeddingService } from '../../neuralInverse/browser/context/search/embeddingService.js';
+import { IVoidSettingsService } from '../common/voidSettingsService.js';
 
 class AgentMemoryEmbeddingContribution extends Disposable {
 
 	constructor(
 		@IAgentMemoryService memoryService: IAgentMemoryService,
 		@IEmbeddingService embeddingService: IEmbeddingService,
+		@IVoidSettingsService settingsService: IVoidSettingsService,
 	) {
 		super();
 
@@ -30,6 +32,18 @@ class AgentMemoryEmbeddingContribution extends Disposable {
 			setEmbeddingProvider?: (fn: ((text: string) => Promise<number[] | null>) | null) => void;
 		};
 		if (!withEmbeddings.setEmbeddingProvider) return; // older memory service — lexical only
+
+		// Gate on the ledger flag, same as ledgerRecallContrib: embeddings fire
+		// real (paid) HTTP calls with the user's API key and persist ~1536-float
+		// vectors per memory. Flag-off must reproduce pre-ledger behavior
+		// exactly — pure lexical memory, no network, no vectors (review
+		// finding, 2026-09-05). Memories are still stored; only the vector
+		// path waits for the flag.
+		let ledgerOn = false;
+		try {
+			ledgerOn = !!settingsService.state.globalSettings.contextLedgerEnabled;
+		} catch { /* settings not ready — stay lexical */ }
+		if (!ledgerOn) return;
 
 		withEmbeddings.setEmbeddingProvider(async (text: string): Promise<number[] | null> => {
 			try {

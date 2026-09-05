@@ -697,10 +697,36 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 		list.push(episode);
 		list.sort((a, b) => a.ordinal - b.ordinal);
 		state.episodeCount = Math.max(state.episodeCount, list.length);
-		// keep the CAS anchor's episodeCount current
+		// keep the CAS anchor's episodeCount current. The anchor write must NOT
+		// clobber concurrent writers: re-read disk meta inside the window and
+		// take the max of disk vs memory. Writing state.seq.last blindly (which
+		// includes still-queued entries, or is STALE when another window
+		// appended durably) desyncs metaLastSeq — the next flush then
+		// "realigns", renumbers pending entries, and can rewrite the live
+		// journal from a stale buffer, deleting the other window's entries
+		// (review finding P1, 2026-09-05).
 		try {
 			await withInverseWriteAccess(inversePath, async () => {
-				await this._writeFileAtomic(URI.joinPath(this._threadDirUri(root, state), META_FILE), JSON.stringify(this._metaOf(state), null, 2));
+				const diskMeta = await this._readJsonFile<ILedgerThreadMeta>(URI.joinPath(this._threadDirUri(root, state), META_FILE));
+				const lastSeq = Math.max(state.seq.last, diskMeta?.lastSeq ?? 0);
+				const episodeCount = Math.max(state.episodeCount, diskMeta?.episodeCount ?? 0);
+				const briefRevision = Math.max(state.briefRevision, diskMeta?.briefRevision ?? 0);
+				const meta: ILedgerThreadMeta = {
+					threadId: state.threadId,
+					lastSeq,
+					episodeCount,
+					briefRevision,
+					schemaVersion: LEDGER_SCHEMA_VERSION,
+				};
+				if (diskMeta?.migratedAt !== undefined) meta.migratedAt = diskMeta.migratedAt;
+				else if (state.metaMigratedAt !== undefined) meta.migratedAt = state.metaMigratedAt;
+				await this._writeFileAtomic(URI.joinPath(this._threadDirUri(root, state), META_FILE), JSON.stringify(meta, null, 2));
+				// the tracker's CAS belief must stay at OUR seq (not the merged
+				// disk value): if disk was AHEAD (another window appended), the
+				// next flush must still see a mismatch and realign the tracker —
+				// aligning here would let the stale tracker hand out duplicate
+				// seqs. When disk was NOT ahead, this equals what we just wrote.
+				state.metaLastSeq = state.seq.last;
 			});
 		} catch {
 			this._degrade(state);
@@ -750,8 +776,16 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 	}
 
 	override dispose(): void {
+		// Best-effort drain: entries returned to callers as journaled receipts
+		// sit in a ≤300ms/64KB queue — dropping them on quit silently loses
+		// journal data (review finding, 2026-09-05). We cannot await in
+		// dispose, so fire the flush; whatever loses the race is repaired by
+		// the crash-recovery path on next open.
 		for (const state of this._states.values()) {
 			if (state.flushTimer !== undefined) clearTimeout(state.flushTimer);
+			if (state.queue.length > 0 && !state.degraded) {
+				void Promise.resolve(this._flushSoon(state)).catch(() => undefined);
+			}
 		}
 		this._states.clear();
 		super.dispose();
