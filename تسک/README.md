@@ -151,9 +151,10 @@ compaction ای که از نظر الگوریتم جلوتر است.
 
 | تسک | وضعیت | شاخه (branch) | یادداشت |
 |---|---|---|---|
-| M5 | 🔴 | `feat/context-ledger` (پیشنهادی) | ستون فقرات حافظه/context — M1 و بخشی از M2/C7/F2 را می‌بلعد |
-| M1 | 🟡 | `feat/agent-conversation-memory` | در فاز ۰ و ۵ از M5 حل می‌شود |
-| بقیه | 🔴 | — | — |
+| M5 | 🟡 | `feat/context-ledger` | فازهای ۰-۳ و ۵ روی سورس کامل + تست standalone؛ پورت live-patch و تست owner مانده (بند ۱۳ تسک) |
+| M1 | 🟡 | درون M5 | journal = persistence؛ کلید conversationId در فاز ۵ بسته شد؛ تست owner مانده |
+| M2 | 🟡 | درون `feat/context-ledger` | بازیابی hybrid + pin + سقف ۲۰۰۰ پیاده شد؛ تست owner مانده |
+| M3 / M4 | 🔴 | — | روی زیرساخت M5 در session بعدی |
 
 ## Definition of Done (برای هر تسک)
 

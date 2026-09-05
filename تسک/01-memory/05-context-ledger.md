@@ -2,7 +2,9 @@
 
 - **اولویت:** P0 — ستون فقرات دسته‌ی حافظه؛ M1/M2 زیرمجموعه‌ی آن می‌شوند
 - **برآورد:** L (۵ فاز، هر فاز مستقلاً قابل تست و live-patch)
-- **وضعیت:** 🔴 شروع نشده | **شاخه‌ی پیشنهادی:** `feat/context-ledger` (از `feat/agent-conversation-memory`)
+- **وضعیت:** 🟡 فازهای ۰-۳ + فاز ۵ روی سورس پیاده و با تست standalone تأیید شده؛
+  **باقی‌مانده:** پورت live-patch، تست owner روی نسخه‌ی نصبی، تست مقیاس ۱۰M
+  | **شاخه:** `feat/context-ledger` (از `feat/agent-conversation-memory`)
 - **وابستگی:** — (زیرساخت‌های لازم همه از قبل در کد هستند)
 - **هم‌ارز در بازار:** Cursor Memories + Claude Code compaction + session resume — و یک قدم جلوتر:
   در هیچ‌کدام از آنها «مسیرهای رد شده» به‌صورت ساخت‌یافته و مصون از فراموشی نگه‌داری نمی‌شود.
@@ -424,3 +426,35 @@ expand_history({ fromSeq, toSeq })   // سقف RECALL_MAX_TOKENS، بریدن ا
 | **F4** knowledge files | `invariants` می‌تواند به فایل knowledge صادر شود |
 | **Q1** هزینه | توکن‌شمار واقعی فاز ۴ |
 | **C4** pinned | pinned از compaction مصون است — assembler آن را قبل از recalled می‌گذارد |
+
+---
+
+## ۱۳. وضعیت اجرا (۱۴۰۵/۰۶/۱۴ — session اول پیاده‌سازی)
+
+**پیاده‌سازی‌شده روی سورس** (شاخه‌ی `feat/context-ledger`):
+
+| کامیت | محتوا |
+|---|---|
+| `938d608` | قراردادهای `ledgerTypes` + `ledgerPolicy` |
+| `cda503d` | flag سراسری `contextLedgerEnabled` + toggle در Settings |
+| `ef028bc` | فاز ۰ — سرویس journal (CAS چندپنجره‌ای، blob، write-once اپیزودها) |
+| `bb3dd15` | فاز ۱ — خلاصه‌ساز اپیزود (schema ساخت‌یافته + fallback مکانیکی) |
+| `33bf175` | فاز ۲الف — ادغام قطعی brief (۹ قانون) |
+| `f62ec41` | فاز ۲ب — assembler بودجه‌محور + پایداری prefix (D5) |
+| `2434cc1` | اتصال مسیر چت (هوک نوشتن، مهاجرت copy-only، بستن اپیزود) |
+| `2968638` | فاز ۵ — executor + workflow روی Ledger + کلید conversationId |
+| `8458f3a` | M2 — بازیابی hybrid حافظه (برداری + واژگانی + pin) |
+| `bfa2df8` | ابزارهای recall/expand + هزینه‌ی واقعی session |
+
+**تأییدشده با تست standalone:** merge laws ۹گانه، رندر بایت‌به‌بایت پایدار،
+parser مقاوم JSON، استخراج مکانیکی، مرز اپیزود، flush/CAS/blob/write-once سرویس
+journal (با stub)، و مسیر کامل چت (مهاجرت → assembly → دو بستن اپیزود متوالی
+با revision bump). دو باگ واقعی در همین تست‌ها پیدا و رفع شد: فراخوانی
+`readRange` بدون threadId و انتخاب مجدد مرز قبلی در بستن متوالی.
+
+**باقی‌مانده (به ترتیب):**
+1. **پورت live-patch** (دروازه‌ی ۴ `AGENTS.local.md`) — حجم بالای JS دستی؛ session جداگانه
+2. تست owner روی نسخه‌ی نصبی + تست مقیاس ۱۰M (بند ۱۱-۸)
+3. ثبت `usage` واقعی provider (نیازمند تغییر OnFinalMessage در ۶ provider — فاز ۴ کامل)
+4. M3 (auto-capture از `invariants` اپیزودها + تب Memory) و M4 (docs KB) روی همین زیرساخت
+5. `/compact` خطی و کارت brief در UI (C7)
