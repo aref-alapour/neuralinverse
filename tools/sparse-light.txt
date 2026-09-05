@@ -1,0 +1,12 @@
+resources
+src/vs/base/common
+src/vs/platform/product
+src/vs/platform/update
+src/vs/workbench/browser
+src/vs/workbench/contrib/neuralInverse
+src/vs/workbench/contrib/neuralInverseFirmware
+src/vs/workbench/contrib/powerMode
+src/vs/workbench/contrib/void
+src/vs/workbench/services/update
+tools
+"\330\252\330\263\332\251"

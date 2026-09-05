@@ -1,0 +1,41 @@
+# A4 — سیستم مجوز یکپارچه + پیش‌نمایش (Unified Permissions)
+
+- **اولویت:** P1 | **برآورد:** M | **وضعیت:** 🔴 | **وابستگی:** —
+- **هم‌ارز در Cursor:** سطح‌های auto-run (خواندن/نوشتن/ترمینال) با یک UX واحد
+
+## هدف
+الان سه مدل مجوز موازی داریم: chat سه‌سطحی (`edits/terminal/MCP` + autoApprobe)،
+autonomy service با tier های `auto/notify/confirm` از `.neuralinverseagent`، و
+workflow engine با approval gate های per-step — ولی executor خودِ NI برای `runCommand`
+فقط یک blocklist Regex دارد! هدف: یک `IPermissionService` واحد که همه‌ی stack ها
+از آن بپرسند.
+
+## وضعیت فعلی در کد
+- `void/common/toolsServiceTypes.ts:21` — `approvalTypeOfBuiltinToolName` + دسته‌های
+  `autoApprove` در settings
+- `neuralInverseAgentConfigService` + `.neuralinverseagent` — tier per-tool + block/allow list
+- `powerMode` — `bashSecurity.ts` (پارس فرمان و رتبه‌بندی خطر)
+- `neuralInverse/browser/tools/terminalTools.ts` — `runCommand` با blocklist استاتیک،
+  بدون تأیید انسانی، timeout پیش‌فرض ۳۰s
+- approval gate های workflow (`approvalGate.ts`) — جدا از همه‌ی این‌ها
+
+## طرح پیاده‌سازی
+1. **مدل واحد:** `PermissionRequest { tool, args, riskTier, source }` و
+   `PermissionDecision { allow | deny | ask }` با سیاست‌های تجمعی:
+   workspace config > global settings > پیش‌فرض per-tool
+2. **routing:** هر سه مسیر (chat tool loop، autonomy service، NI executor) قبل از
+   اجرا از `IPermissionService` می‌پرسند؛ جواب ask → دیالوگ تأیید با
+   **پیش‌نمایش** (دیف فایل برای ابزارهای نوشتن؛ فرمان پارس‌شده + مسیرهای درگیر برای ترمینال)
+3. **پارس فرمان:** ادغام `bashSecurity.ts` در سرویس مرکزی (رتبه‌ی خطر: خواندن /
+   نوشتن / شبکه / مخرب-نما) — blocklist فعلی فقط به‌عنوان آخرین لایه می‌ماند
+4. **«همیشه اجازه بده»** در دیالوگ → نوشتن در config (per-tool یا per-pattern مثل
+   `npm test*`) — تجربه‌ی Cursor-like
+5. **sandbox (phase 2، تسک جدا):** محدودسازی شبکه/فایل در سطح OS — ویندوز: Job Object
+   + restricted token؛ در سند معماری تسک ثبت شود ولی در این تسک انجام نشود
+6. مهاجرت تدریجی: اول executor (بحرانی‌ترین)، بعد chat، بعد Power Mode
+
+## معیارهای پذیرش
+- [ ] `runCommand` در executor برای فرمان خطرناک (مثلاً `rm`) الگو-approved می‌خواهد
+- [ ] «همیشه اجازه بده» برای `npm test*` فقط همان الگو را آزاد می‌کند
+- [ ] پیش‌نمایش دیالوگ (دیف/فرمان) درست است
+- [ ] سه stack بدون تغییر رفتار کاربر فعلی از سرویس جدید استفاده می‌کنند
