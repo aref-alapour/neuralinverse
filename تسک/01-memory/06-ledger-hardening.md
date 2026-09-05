@@ -1,6 +1,6 @@
 # M6 — سخت‌سازی Context Ledger (شکاف‌های پیداشده در ممیزی)
 
-- **اولویت:** P0 — قبل از هر تست زنده‌ی Ledger | **برآورد:** M | **وضعیت:** 🔴
+- **اولویت:** P0 — قبل از هر تست زنده‌ی Ledger | **برآورد:** M | **وضعیت:** ✅ کد کامل (2026-09-05؛ تست زنده و پورت live-patch طبق همین سند، بعد از Q4 باقی می‌ماند)
 - **شاخه:** ادامه‌ی `feat/context-ledger`
 - **وابستگی:** [M5](05-context-ledger.md) (پیاده‌سازی پایه) | **مرتبط:** [Q5](../05-quality/05-verification-harness.md)، [C2](../02-context/02-context-gauge-ui.md)، [C7](../02-context/07-compaction-ux.md)
 
@@ -116,12 +116,42 @@ Use recall_history to retrieve any of them.
 
 ## معیارهای پذیرش
 
-- [ ] اپیزود در یک thread با turn های ابزارمحور (۲۵ ورودی در یک turn) بسته می‌شود؛ تست با ترکیب واقعی نقش‌ها سبز است
-- [ ] هیچ مسیر `return` خاموشی در بستن اپیزود نمانده — همه یا لاگ دارند یا شمارنده
-- [ ] منطق مرز در chat و executor یک تابع مشترک است (تست روی همان یک تابع)
-- [ ] با `brief=null` و tail سرریز، `<ledger_notice>` تزریق می‌شود (تست)
-- [ ] خط `ledger assembled:` در کنسول با اعداد درست ظاهر می‌شود و جمع بخش‌ها با total برابر است
-- [ ] `usage` واقعی حداقل برای دو provider (anthropic + یک OpenAI-compatible) ثبت می‌شود
-- [ ] `_journaledThisSession` بعد از مهاجرت پاک می‌شود
-- [ ] `node tools/verify.mjs` ([Q5](../05-quality/05-verification-harness.md)) سبز
-- [ ] پورت live-patch **فقط بعد از** سبز شدن [Q4](../05-quality/04-live-patch-integrity.md) — تا وقتی ابزار می‌تواند بی‌صدا هیچ کاری نکند، تست زنده بی‌معنی است
+- [x] اپیزود در یک thread با turn های ابزارمحور بسته می‌شود؛ تست با ترکیب واقعی نقش‌ها
+  سبز است (`ledgerBoundary.test.ts`: سناریوی ۲۵ ورودی ابزار در انتهای ژورنال —
+  دقیقاً شکلی که پنجره‌ی ثابت ۱۲تایی را می‌شکند — + ترکیب ممیزی
+  user/assistant/tool×6/assistant/user؛ `sizes` اثبات می‌کند پنجره ۱۲→۲۴→۴۸ رشد کرده)
+- [x] هیچ مسیر `return` خاموشی در بستن اپیزود نمانده — همه یا لاگ دارند یا شمارنده
+  (`noteBoundaryMissed`: شمارنده per-thread + `console.warn` یک‌بار به‌ازای هر دلیل؛
+  executor علاوه بر آن `ctx.log` می‌زند؛ بستن موفق، warned-state را ریست می‌کند)
+- [x] منطق مرز در chat و executor یک تابع مشترک است:
+  `void/common/ledgerBoundary.ts → resolveCloseBoundary` (هر دو نقطه فقط
+  decideBoundary را gate می‌کنند و بعد همان تابع را صدا می‌زنند)
+- [x] با `brief=null` و tail سرریز، `<ledger_notice>` تزریق می‌شود (سه تست در
+  `contextAssembler.test.ts`: تزریق با covers_messages درست / عدم تزریق وقتی
+  چیزی fold نمی‌شود / عدم تزریق وقتی brief هست؛ توکن‌های notice از بودجه‌ی tail
+  رزرو می‌شود تا جمع بخش‌ها دقیقاً با total برابر بماند)
+- [x] خط `ledger assembled:` در کنسول با اعداد درست ظاهر می‌شود و جمع بخش‌ها با
+  total برابر است (ساختار گزارش: بخش‌ها از `report.sections` چاپ می‌شوند که
+  by-construction با `totalTokens` جمع می‌شوند؛ شامل بخش `notice` و
+  `journal <کل توکن‌های ژورنال>`)
+- [x] `usage` واقعی برای anthropic + openai-compatible ثبت می‌شود: `OnFinalMessage`
+  فیلد `usage` گرفت؛ anthropic از `response.usage`، openai-compat با
+  `stream_options.include_usage` از چانک آخر؛ در `chatThreadService` روی
+  `meta.usage` ورودی ژورنال + جمع session + کالیبراسیون per-model
+  (نسبت تخمین/واقعی؛ `getSessionCost` اول واقعی، بعد کالیبره‌شده) —
+  **تست زنده‌ی provider هنوز نه** (پورت Ledger ممنوع تا بعد از این تسک؛
+  هماهنگ با قاعده‌ی همین سند)
+- [x] `_journaledThisSession` بعد از مهاجرت پاک می‌شود (و دیگر ساخته نمی‌شود —
+  فقط در بازه‌ی migration زنده است)
+- [x] `node tools/verify.mjs` سبز (type-check ۲۳ فایل/۱۰٬۰۷۰ خط صفر خطا + ۷۹ تست)
+- [ ] پورت live-patch Ledger — عمداً باز: طبق خود تسک فقط بعد از Q4 سبز و با
+  تصمیم صریح (پیشنهاد ممیزی: اول dev-build)
+
+### باگ‌های latent اضافی که هارنس Q5 در همان گذر پیدا کرد
+
+- `contextLedgerService`: توکن DI فقط value بود؛ استفاده‌ی type در
+  `@IContextLedgerService x: IContextLedgerService` نمی‌گذاشت — type-alias هم‌نام اضافه شد.
+- `chatThreadService`: `_getAgentService` مقدار `undefined` را برمی‌گرداند برخلاف
+  امضای `| null`؛ و `getSessionCost` به `content` روی union نقش‌ها می‌زد.
+- `ledgerRecallContrib`: `ledgerOn` مرده بود و هدر می‌گفت ابزارها فقط با فلگ ثبت
+  می‌شوند — ثبت حالا واقعاً به فلگ گره خورد.

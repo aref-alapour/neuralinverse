@@ -141,7 +141,7 @@ export interface IContextLedgerService {
 // ─── Assembly contract (L4) ──────────────────────────────────────────────────
 
 export interface IContextUsageSection {
-	name: 'system' | 'brief' | 'pinned' | 'recalled' | 'tail' | 'reserved-output';
+	name: 'system' | 'brief' | 'pinned' | 'recalled' | 'notice' | 'tail' | 'reserved-output';
 	tokens: number;
 }
 

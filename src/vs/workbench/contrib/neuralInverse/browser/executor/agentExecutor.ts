@@ -36,6 +36,7 @@ import { EpisodeSummarizer } from '../../../void/browser/episodeSummarizer.js';
 import { ILedgerAppendInput, ILedgerEntry } from '../../../void/common/ledgerTypes.js';
 import { DEFAULT_LEDGER_POLICY } from '../../../void/common/ledgerPolicy.js';
 import { buildWorkingBrief } from '../../../void/common/workingBriefBuilder.js';
+import { resolveCloseBoundary, noteBoundaryMissed, resetBoundaryMissTelemetry } from '../../../void/common/ledgerBoundary.js';
 import { IAgentDefinition, IWorkflowStep, IStepRun, IToolCallRecord, IToolExecutionContext, IStepToolCacheConfig } from '../../common/workflowTypes.js';
 import { ScopedToolRegistry } from '../tools/toolRegistry.js';
 import { parseToolCalls, stripToolCallBlocks } from './toolCallParser.js';
@@ -593,7 +594,8 @@ export class AgentExecutor {
 	 * deterministic working brief, then rebuilds the LOCAL `history` for
 	 * sending as [system, brief, verbatim tail]. The ledger keeps every entry,
 	 * so nothing is lost. Best-effort inside: callers wrap it so any failure
-	 * falls back to the legacy compactor.
+	 * falls back to the legacy compactor. The boundary search is shared with
+	 * the chat path (M6 item 1): common/ledgerBoundary.resolveCloseBoundary.
 	 */
 	private async _compactHistoryViaLedger(history: LLMChatMessage[], ctx: IToolExecutionContext, step: IWorkflowStep, agent: IAgentDefinition): Promise<void> {
 		const ledger = this.contextLedgerService;
@@ -606,28 +608,33 @@ export class AgentExecutor {
 		const stats = await ledger.stats(threadId);
 		if (!stats || stats.entryCount === 0) return;
 		const episodes = await ledger.listEpisodes(threadId);
-		// the tail window that must stay verbatim (tailMin + slack for the
-		// user-message boundary search)
-		const tail = await ledger.readTail(threadId, DEFAULT_LEDGER_POLICY.tailMinMessages + 4);
-		if (tail.length === 0) return;
+		// the smallest tail window answers decideBoundary's tail-size check;
+		// resolveCloseBoundary grows the window itself when a boundary is due
+		const tailProbe = await ledger.readTail(threadId, DEFAULT_LEDGER_POLICY.tailMinMessages + 4);
+		if (tailProbe.length === 0) return;
 		// 2. no idle signal in the executor (it compacts mid-run, never idle);
 		// there is no force/overflow signal to honor today either — a future
 		// context-overflow recovery would pass { force: true } here.
-		const decision = EpisodeSummarizer.decideBoundary(stats, tail.length, 0, DEFAULT_LEDGER_POLICY);
+		const decision = EpisodeSummarizer.decideBoundary(stats, tailProbe.length, 0, DEFAULT_LEDGER_POLICY);
 		if (!decision || !decision.close) return;
 
 		const fromSeq = episodes.reduce((m, ep) => Math.max(m, ep.range.toSeq), 0) + 1;
-		// safe boundary: the first `user` entry within the slack window that
-		// starts a NEW episode (strictly after the summarized end); without the
-		// seq check a second compaction would re-pick the previous boundary and
-		// produce an empty episode
-		const boundaryIdx = tail.findIndex(e => e.role === 'user' && e.seq > fromSeq);
-		if (boundaryIdx < 0 || boundaryIdx > 4) return;
-		const toSeq = tail[boundaryIdx].seq - 1;
-		if (toSeq < fromSeq) return;
+		// shared growing-window boundary search — a tool-heavy turn no longer
+		// silently skips the close (M6 item 1)
+		const boundary = await resolveCloseBoundary(fromSeq, DEFAULT_LEDGER_POLICY, n => ledger.readTail(threadId, n));
+		if (boundary.kind !== 'close' || !boundary.window) {
+			const reason = boundary.kind === 'deferred' ? boundary.reason : 'no boundary window';
+			noteBoundaryMissed(threadId, reason ?? 'no safe episode boundary');
+			ctx.log(`[${step.id}] ledger boundary missed: ${reason ?? 'no safe episode boundary'}`);
+			return;
+		}
+		const toSeq = boundary.toSeq!;
 		// 3. freeze the episode and rebuild the brief from all episodes
 		const entries = await ledger.readRange(threadId, fromSeq, toSeq);
-		if (entries.length === 0) return;
+		if (entries.length === 0) {
+			noteBoundaryMissed(threadId, `boundary seq ${boundary.boundarySeq} selected an empty episode range ${fromSeq}-${toSeq}`);
+			return;
+		}
 		const episode = await new EpisodeSummarizer(this.llmService).summarizeEpisode({
 			threadId,
 			ordinal: episodes.length + 1,
@@ -644,6 +651,7 @@ export class AgentExecutor {
 			policy: DEFAULT_LEDGER_POLICY,
 		});
 		await ledger.saveBrief(brief);
+		resetBoundaryMissTelemetry(threadId);
 
 		ctx.log(`[${step.id}] ledger episode ${episode.ordinal} frozen (${decision.reason}): seq ${fromSeq}-${toSeq}, brief revision ${brief.revision} (~${brief.tokens} tokens)`);
 
@@ -656,7 +664,7 @@ export class AgentExecutor {
 		history.push(
 			systemMessage,
 			{ role: 'user', content: brief.text + LEDGER_BRIEF_TRAILER },
-			...tail.slice(boundaryIdx)
+			...boundary.window.slice(boundary.boundaryIdx!)
 				.map(_ledgerEntryToChatMessage)
 				.filter((m): m is LLMChatMessage => m !== undefined),
 		);

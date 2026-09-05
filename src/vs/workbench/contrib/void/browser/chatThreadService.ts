@@ -56,6 +56,7 @@ import { EpisodeSummarizer } from './episodeSummarizer.js';
 import { buildWorkingBrief } from '../common/workingBriefBuilder.js';
 import { assemble } from '../common/contextAssembler.js';
 import { DEFAULT_LEDGER_POLICY } from '../common/ledgerPolicy.js';
+import { resolveCloseBoundary, noteBoundaryMissed, resetBoundaryMissTelemetry } from '../common/ledgerBoundary.js';
 
 
 // Tool name aliases: OSS models use alternative names for built-in tools
@@ -96,6 +97,14 @@ const RETRY_DELAY = 2500
 // A provider stream that emits no chunks for this long is treated as dead and
 // aborted — without this a stalled connection leaves the thread spinning forever.
 const LLM_STREAM_STALL_MS = 180_000 // 3 minutes
+
+/** Compact token count for the ledger assembled log line: 0 / 41 / 38.2k / 1.84M. */
+function fmtTokens(n: number): string {
+	if (n === 0) return '0'
+	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
+	if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+	return String(n)
+}
 
 
 const findStagingSelectionIndex = (currentSelections: StagingSelectionItem[] | undefined, newSelection: StagingSelectionItem): number | null => {
@@ -201,7 +210,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 				this._agentService = null
 			}
 		}
-		return this._agentService
+		return this._agentService ?? null
 	}
 
 	// Pre-send context compaction (opencode-style). Lazy because it needs the
@@ -229,6 +238,12 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	private readonly _ledgerUsageReports = new Map<string, IContextUsageReport>()
 	/** message objects already journaled this session (migration dedupe) */
 	private readonly _journaledThisSession = new Map<string, Set<ChatMessage>>()
+	/** real provider usage of the last final message per thread — feeds the journal + calibration (task M6 item 4) */
+	private readonly _ledgerLastUsage = new Map<string, { input: number; output: number }>()
+	/** accumulated REAL usage per thread; getSessionCost prefers it over estimates */
+	private readonly _ledgerSessionUsage = new Map<string, { input: number; output: number }>()
+	/** per-model calibration ratio estimated/actual input tokens (task M6 item 4) */
+	private readonly _ledgerCalibration = new Map<string, { ratio: number; n: number }>()
 	private _ledgerWarned = false
 
 	private _ledgerEnabled(): boolean {
@@ -258,15 +273,42 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	private _journalMessage(threadId: string, m: ChatMessage): void {
 		const input = this._toLedgerInput(m)
 		if (!input) return
-		let set = this._journaledThisSession.get(threadId)
-		if (!set) { set = new Set(); this._journaledThisSession.set(threadId, set) }
-		set.add(m)
+		// Migration dedupe only (M6 item 5): the set exists solely while a
+		// legacy thread's migration is still pending and is deleted once it
+		// settles — it is never re-created, so it cannot pin every message
+		// of the session in memory anymore.
+		this._journaledThisSession.get(threadId)?.add(m)
+		// Real provider usage of the reply this assistant message came from
+		// (M6 item 4); consumed exactly once, right here.
+		if (m.role === 'assistant') {
+			const usage = this._ledgerLastUsage.get(threadId)
+			if (usage) {
+				this._ledgerLastUsage.delete(threadId)
+				input.meta = { ...input.meta, usage: { ...usage } }
+			}
+		}
 		this._contextLedgerService.append(threadId, input)
 			.then(entry => {
 				// feed the recall index (task M5 phase 3) — best-effort, idle-safe
 				if (entry) void this._recallIndexService?.indexEntry(threadId, entry).catch(() => undefined)
 			})
 			.catch(() => this._warnLedgerOnce())
+	}
+
+	/** Record real provider usage: last-usage side channel + session totals + per-model calibration (M6 item 4). */
+	private _recordLedgerUsage(threadId: string, modelSelection: ModelSelection | null, usage: { input: number; output: number }): void {
+		this._ledgerLastUsage.set(threadId, usage)
+		const acc = this._ledgerSessionUsage.get(threadId) ?? { input: 0, output: 0 }
+		acc.input += usage.input
+		acc.output += usage.output
+		this._ledgerSessionUsage.set(threadId, acc)
+		const report = this._ledgerUsageReports.get(threadId)
+		if (modelSelection && report && report.totalTokens > 0 && usage.input > 0) {
+			const key = `${modelSelection.providerName}/${modelSelection.modelName}`
+			const sample = report.totalTokens / usage.input // estimate / actual
+			const prev = this._ledgerCalibration.get(key)
+			this._ledgerCalibration.set(key, { ratio: (prev ? (prev.ratio * prev.n + sample) / (prev.n + 1) : sample), n: prev ? prev.n + 1 : 1 })
+		}
 	}
 
 	/**
@@ -283,10 +325,18 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			const stats = await this._contextLedgerService.stats(threadId)
 			if (!stats || stats.entryCount === 0) {
 				const journaled = this._journaledThisSession.get(threadId)
-				for (const m of rawMessages) {
-					if (journaled?.has(m)) continue
-					const input = this._toLedgerInput(m)
-					if (input) await this._contextLedgerService.append(threadId, input)
+				try {
+					for (const m of rawMessages) {
+						if (journaled?.has(m)) continue
+						const input = this._toLedgerInput(m)
+						if (input) await this._contextLedgerService.append(threadId, input)
+					}
+				} finally {
+					// M6 item 5: migration settled — the dedupe set has no further
+					// job (the journal is non-empty now, or there was nothing to
+					// journal) and must not hold message references for the rest
+					// of the session.
+					this._journaledThisSession.delete(threadId)
 				}
 			}
 
@@ -315,6 +365,16 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			if (brief !== null) this._ledgerPrevPrefix.set(threadId, { revision: brief.revision, prefix: brief.text })
 			this._ledgerUsageReports.set(threadId, assembled.report)
 
+			// One honest line per send (M6 item 3): exact section sizes, the
+			// revision, and total journal tokens so "payload is constant" is
+			// measurable, not asserted. The printed sections always sum to
+			// totalTokens (reserved-output is informational and excluded).
+			const parts = assembled.report.sections
+				.filter(s => s.name !== 'reserved-output')
+				.map(s => `${s.name} ${fmtTokens(s.tokens)}`)
+				.join(' + ')
+			console.log(`[ChatThread] ledger assembled: ${parts} = ${fmtTokens(assembled.report.totalTokens)} / ${fmtTokens(assembled.report.availableInputTokens)} (rev ${brief?.revision ?? 0}, journal ${fmtTokens(stats?.totalTokens ?? 0)})`)
+
 			// the assembled head (brief/pinned/recalled synthetics) maps to plain
 			// user ChatMessages; the verbatim tail passes through untouched
 			const tailLen = raws.length - assembled.keepFromIdx
@@ -340,6 +400,8 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	 * Close an episode when the boundary policy says so (tokens / idle /
 	 * force) and rebuild the working brief from all frozen episodes.
 	 * Background-safe: callers may fire-and-forget; failures warn once.
+	 * The boundary search itself is shared with the executor (M6 item 1):
+	 * common/ledgerBoundary.resolveCloseBoundary.
 	 */
 	private async _closeEpisodeIfNeeded(threadId: string, modelSelection: ModelSelection | null, force: boolean): Promise<void> {
 		if (!modelSelection) return
@@ -347,24 +409,27 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			const stats = await this._contextLedgerService.stats(threadId)
 			if (!stats || stats.entryCount === 0) return
 			const episodes = await this._contextLedgerService.listEpisodes(threadId)
-			// the tail window that must stay verbatim (tailMin + slack for the
-			// user-message boundary search)
-			const tail = await this._contextLedgerService.readTail(threadId, DEFAULT_LEDGER_POLICY.tailMinMessages + 4)
-			if (tail.length === 0) return
 			const idleMs = stats.lastEntryTs ? Date.now() - stats.lastEntryTs : 0
-			const decision = EpisodeSummarizer.decideBoundary(stats, tail.length, idleMs, DEFAULT_LEDGER_POLICY, { force })
+			// the smallest tail window answers decideBoundary's tail-size check;
+			// resolveCloseBoundary grows the window itself when a boundary is due
+			const tailProbe = await this._contextLedgerService.readTail(threadId, DEFAULT_LEDGER_POLICY.tailMinMessages + 4)
+			if (tailProbe.length === 0) return
+			const decision = EpisodeSummarizer.decideBoundary(stats, tailProbe.length, idleMs, DEFAULT_LEDGER_POLICY, { force })
 			if (!decision || !decision.close) return
 			const fromSeq = episodes.reduce((m, ep) => Math.max(m, ep.range.toSeq), 0) + 1
-			// safe boundary: the first `user` entry within the slack window that
-			// starts a NEW episode (strictly after the summarized end); without
-			// the seq check a second close would re-pick the previous boundary
-			// and produce an empty episode
-			const boundaryIdx = tail.findIndex(e => e.role === 'user' && e.seq > fromSeq)
-			if (boundaryIdx < 0 || boundaryIdx > 4) return
-			const toSeq = tail[boundaryIdx].seq - 1
-			if (toSeq < fromSeq) return
+			// shared growing-window boundary search — a tool-heavy turn no longer
+			// silently skips the close (M6 item 1)
+			const boundary = await resolveCloseBoundary(fromSeq, DEFAULT_LEDGER_POLICY, n => this._contextLedgerService.readTail(threadId, n))
+			if (boundary.kind !== 'close') {
+				noteBoundaryMissed(threadId, boundary.reason ?? 'no safe episode boundary')
+				return
+			}
+			const toSeq = boundary.toSeq!
 			const entries = await this._contextLedgerService.readRange(threadId, fromSeq, toSeq)
-			if (entries.length === 0) return
+			if (entries.length === 0) {
+				noteBoundaryMissed(threadId, `boundary seq ${boundary.boundarySeq} selected an empty episode range ${fromSeq}-${toSeq}`)
+				return
+			}
 			const episode = await this._getLedgerSummarizer().summarizeEpisode({
 				threadId,
 				ordinal: episodes.length + 1,
@@ -384,8 +449,10 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 				policy: DEFAULT_LEDGER_POLICY,
 			})
 			await this._contextLedgerService.saveBrief(brief)
-			// adopt the new revision cleanly on the next send
+			// adopt the new revision cleanly on the next send; a successful
+			// close also re-arms the boundary-miss warning (M6 item 1)
 			this._ledgerPrevPrefix.delete(threadId)
+			resetBoundaryMissTelemetry(threadId)
 			console.log(`[ChatThread] ledger episode ${episode.ordinal} frozen (${decision.reason}): seq ${fromSeq}-${toSeq}, brief revision ${brief.revision} (~${brief.tokens} tokens)`)
 		} catch {
 			this._warnLedgerOnce()
@@ -498,9 +565,10 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	}
 
 	/**
-	 * Session cost from the last assembler usage report (or message estimates
-	 * before the first ledger send) priced by the model's published rates.
-	 * Estimates until providers surface real usage — see task Q1/M5 phase 4.
+	 * Session cost: REAL provider usage when the ledger recorded it (M6 item
+	 * 4), otherwise the chars/4 estimate — calibrated by the per-model
+	 * estimated/actual ratio once one real sample exists. Priced by the
+	 * model's published rates.
 	 */
 	getSessionCost(threadId: string): { totalCost: number; inputTokens: number; outputTokens: number; formattedCost: string } {
 		const { modelSelection } = this._currentModelSelectionProps()
@@ -511,11 +579,22 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			cost = getModelCapabilities(modelSelection.providerName, modelSelection.modelName, overridesOfModel).cost
 		} catch { /* unknown model — zero rates */ }
 		const thread = this._allThreads[threadId]
+		const real = this._ledgerSessionUsage.get(threadId)
+		const calibration = this._ledgerCalibration.get(`${modelSelection.providerName}/${modelSelection.modelName}`)
 		const report = this._ledgerUsageReports.get(threadId)
-		const inputTokens = report
-			? report.totalTokens
-			: (thread?.messages ?? []).reduce((s, m) => s + this.estimateTokens(m.role === 'assistant' ? (m.displayContent ?? '') : (m.content ?? '')), 0)
-		const outputTokens = (thread?.messages ?? []).reduce((s, m) => s + (m.role === 'assistant' ? this.estimateTokens(m.displayContent ?? '') : 0), 0)
+		// chat messages are a role union; only conversational roles have text
+		const estimateOf = (m: ChatMessage): number => this.estimateTokens(m.role === 'assistant' ? (m.displayContent ?? '') : ('content' in m ? (m.content ?? '') : ''))
+		const estimateSum = (thread?.messages ?? []).reduce((s, m) => s + estimateOf(m), 0)
+		const inputTokens = real
+			? real.input
+			: calibration && calibration.n > 0 && calibration.ratio > 0
+				? Math.round((report?.totalTokens ?? estimateSum) / calibration.ratio)
+				: report
+					? report.totalTokens
+					: estimateSum
+		const outputTokens = real
+			? real.output
+			: (thread?.messages ?? []).reduce((s, m) => s + (m.role === 'assistant' ? this.estimateTokens(m.displayContent ?? '') : 0), 0)
 		const totalCost = (inputTokens / 1e6) * cost.input + (outputTokens / 1e6) * cost.output
 		return { totalCost, inputTokens, outputTokens, formattedCost: `$${totalCost.toFixed(4)}` }
 	}
@@ -1192,7 +1271,9 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 						stallWatchdog.reset()
 						this._setStreamState(threadId, { isRunning: 'LLM', llmInfo: { displayContentSoFar: fullText, reasoningSoFar: fullReasoning, toolCallSoFar: toolCalls?.[toolCalls.length - 1] ?? null }, interrupt: Promise.resolve(() => { if (llmCancelToken) this._llmMessageService.abort(llmCancelToken) }) })
 					},
-					onFinalMessage: async ({ fullText, fullReasoning, toolCalls, anthropicReasoning, }) => {
+					onFinalMessage: async ({ fullText, fullReasoning, toolCalls, anthropicReasoning, usage }) => {
+						// real provider usage (M6 item 4) — journaled with the reply
+						if (usage) this._recordLedgerUsage(threadId, modelSelection, usage)
 						resMessageIsDonePromise({ type: 'llmDone', toolCalls, info: { fullText, fullReasoning, anthropicReasoning } }) // resolve with tool calls
 					},
 					onError: async (error) => {

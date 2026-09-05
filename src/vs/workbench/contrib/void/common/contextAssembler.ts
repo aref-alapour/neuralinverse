@@ -95,6 +95,16 @@ export interface IAssembledRequest<T> {
 /** Fixed trailer of the brief message (exact text; asserted byte-for-byte by tests). */
 const BRIEF_TAIL_NOTE = '\n\n(Earlier conversation is preserved in the ledger; the most recent messages follow. Use recall_history for exact older content.)';
 
+/**
+ * Head message injected when messages are folded WITHOUT a brief (no episode
+ * has closed yet) — task M6 item 2. Until this existed the model received a
+ * conversation that started mid-way with no hint that anything was missing.
+ * `count` is the number of folded raw messages (journal seqs are not visible
+ * at this layer; the count is the honest equivalent).
+ */
+const ledgerNotice = (count: number): string =>
+	`<ledger_notice covers_messages="1-${count}">\nOlder messages are preserved in the ledger but are not summarized yet.\nUse recall_history to retrieve any of them.\n</ledger_notice>`;
+
 /** Metric counter the send-path integration increments on a D5 cache break. */
 export const metricName = 'ledger.cacheBreak';
 
@@ -128,7 +138,16 @@ export function assemble<T>(input: IAssembleInput<T>): IAssembledRequest<T> {
 
 	// ── Verbatim tail ──
 	const suffix = suffixTokenSums(compactables);
-	const keepFromIdx = findFoldBoundary(raws, compactables, suffix, tailBudget, policy);
+	let keepFromIdx = findFoldBoundary(raws, compactables, suffix, tailBudget, policy);
+	// The no-brief notice (below) is a real payload section: once folding is
+	// inevitable, re-fit the tail with its (strict upper-bound) cost reserved so
+	// `totalTokens <= available` still holds. `raws.length` bounds every possible
+	// keepFromIdx, so its digit count bounds the notice length from above.
+	if (brief === null && keepFromIdx > 0) {
+		const reserved = estimateTokens(ledgerNotice(raws.length));
+		const refit = findFoldBoundary(raws, compactables, suffix, Math.max(0, tailBudget - reserved), policy);
+		if (refit > keepFromIdx) keepFromIdx = refit;
+	}
 	const tailSectionTokens = suffix[keepFromIdx];
 
 	// ── Compose: brief → pinned → recalled → tail (D5 ordering) ──
@@ -142,6 +161,12 @@ export function assemble<T>(input: IAssembleInput<T>): IAssembledRequest<T> {
 	if (recalledKept.length > 0) {
 		head.push({ role: 'user', content: recalledKept.map(b => `<recalled_context source="recall_history">\n${b}\n</recalled_context>`).join('\n\n') });
 	}
+	// Degenerate passthrough must not be silent (M6 item 2): folding without a
+	// brief still needs a marker telling the model older content exists.
+	const notice = brief === null && keepFromIdx > 0 ? ledgerNotice(keepFromIdx) : null;
+	if (notice !== null) {
+		head.push({ role: 'user', content: notice });
+	}
 	// Degenerate passthrough: nothing injected and nothing folded → raws are
 	// returned as-is (zero-copy); callers must treat the array as read-only.
 	const messages: IAssembledMessage<T>[] = head.length === 0 && keepFromIdx === 0
@@ -152,10 +177,12 @@ export function assemble<T>(input: IAssembleInput<T>): IAssembledRequest<T> {
 	// The system prompt is not ours to report; `reserved-output` lumps the
 	// output reserve and the system reserve together (contextWindow − available).
 	// totalTokens covers only what this request actually sends.
+	const noticeSectionTokens = notice !== null ? estimateTokens(notice) : 0;
 	const sections: IContextUsageSection[] = [
 		{ name: 'brief', tokens: briefSectionTokens },
 		{ name: 'pinned', tokens: pinnedSectionTokens },
 		{ name: 'recalled', tokens: recalledSectionTokens },
+		{ name: 'notice', tokens: noticeSectionTokens },
 		{ name: 'tail', tokens: tailSectionTokens },
 		{ name: 'reserved-output', tokens: contextWindow - available },
 	];
@@ -164,7 +191,7 @@ export function assemble<T>(input: IAssembleInput<T>): IAssembledRequest<T> {
 	// when it builds both strings itself and calls checkPrefixStability directly).
 	const prefix = brief !== null ? brief.text + BRIEF_TAIL_NOTE : '';
 	const report: IContextUsageReport = {
-		totalTokens: briefSectionTokens + pinnedSectionTokens + recalledSectionTokens + tailSectionTokens,
+		totalTokens: briefSectionTokens + pinnedSectionTokens + recalledSectionTokens + noticeSectionTokens + tailSectionTokens,
 		contextWindow,
 		availableInputTokens: available,
 		sections,

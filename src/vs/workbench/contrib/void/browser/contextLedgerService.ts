@@ -63,6 +63,9 @@ import { withInverseWriteAccess } from '../../neuralInverseFirmware/browser/engi
 // imports on purpose; the DI token is therefore declared next to the shell.
 
 export const IContextLedgerService = createDecorator<ILedgerServiceContract>('contextLedgerService');
+// value + type must share the name so `@IContextLedgerService svc: IContextLedgerService`
+// works with one import (the vs/platform convention: interface + token together)
+export type IContextLedgerService = ILedgerServiceContract;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 

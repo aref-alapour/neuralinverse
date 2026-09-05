@@ -39,6 +39,9 @@ class LedgerRecallContribution extends Disposable {
 	) {
 		super();
 
+		// the tools read exclusively from the ledger — register them only when
+		// the flag is on (matches the module header; a mid-session flag flip
+		// applies after the next window reload, like the rest of the contrib)
 		const ledgerOn = (): boolean => {
 			try {
 				return settingsService.state.globalSettings.contextLedgerEnabled
@@ -52,6 +55,12 @@ class LedgerRecallContribution extends Disposable {
 			} catch {
 				return undefined
 			}
+		}
+
+		if (!ledgerOn()) {
+			// keep the ledger service reference alive for future wiring
+			void ledgerService
+			return
 		}
 
 		internalToolService.registerMany([
@@ -98,12 +107,9 @@ class LedgerRecallContribution extends Disposable {
 					} catch (e: any) {
 						return `expand_history unavailable: ${e?.message ?? 'archive unreachable'}`
 					}
-				},
+				}
 			},
 		])
-		// keep the ledger service reference alive for future wiring (index-on-append
-		// hooks land with the recall index integration)
-		void ledgerService
 	}
 }
 

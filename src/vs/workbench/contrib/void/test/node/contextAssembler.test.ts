@@ -104,21 +104,50 @@ suite('contextAssembler — assemble', () => {
 		assert.strictEqual(result.report.totalTokens, 165);
 	});
 
-	test('overflow folds at the oldest user boundary; min tail respected; no brief message when brief is null (degenerate passthrough)', () => {
+	test('overflow folds at the oldest user boundary; min tail respected; no-brief fold injects a <ledger_notice> head (M6 item 2)', () => {
 		const { compactables, raws } = buildConversation(100, CHARS_508); // 50_800 tokens total
 		const result = assemble(baseInput(raws, compactables));
 
 		// tail budget = floor(65_000 · 0.60) = 39_000 → at most floor(39_000 / 508) = 76 messages
 		// → oldest user boundary keeping ≤ 76 is index 24 (76 kept ≥ tailMinMessages 8).
+		// The notice's ~55 tokens are reserved from the tail budget (upper-bounded by
+		// digits(raws.length)), which still admits 76 messages here.
 		assert.strictEqual(result.keepFromIdx, 24);
 		assert.strictEqual(compactables[result.keepFromIdx].role, 'user', 'fold boundary must land on a user message');
 		assert.ok(raws.length - result.keepFromIdx >= DEFAULT_LEDGER_POLICY.tailMinMessages, 'at least tailMinMessages kept verbatim');
-		assert.strictEqual(result.messages.length, 76);
-		for (const m of result.messages) {
+		assert.strictEqual(result.messages.length, 77, 'notice head + 76 verbatim tail messages');
+		const notice = result.messages[0] as { role: string; content: string };
+		assert.strictEqual(notice.role, 'user');
+		assert.ok(notice.content.startsWith('<ledger_notice covers_messages="1-24">'), 'notice names the folded message range');
+		assert.ok(notice.content.includes('Use recall_history to retrieve any of them.'));
+		for (const m of result.messages.slice(1)) {
 			assert.ok(!('__ledgerBrief' in m), 'no brief message is emitted when brief is null');
 		}
 		assert.strictEqual(sectionTokens('tail', result.report.sections), 76 * 508);
-		assert.ok(result.report.totalTokens <= AVAILABLE);
+		assert.ok(sectionTokens('notice', result.report.sections) > 0);
+		assert.ok(result.report.totalTokens <= AVAILABLE, 'notice tokens are reserved from the tail budget, total still fits');
+	});
+
+	test('no notice when nothing is folded, even with brief=null (fits-everything passthrough is unchanged)', () => {
+		const { compactables, raws } = buildConversation(5, CHARS_33);
+		const result = assemble(baseInput(raws, compactables));
+		assert.strictEqual(result.keepFromIdx, 0);
+		assert.strictEqual(result.messages.length, 5);
+		assert.strictEqual(sectionTokens('notice', result.report.sections), 0);
+		for (const m of result.messages) {
+			assert.ok(!String((m as { content?: string }).content ?? '').includes('<ledger_notice'));
+		}
+	});
+
+	test('no notice when a brief exists — the brief trailer already points at the ledger', () => {
+		const { compactables, raws } = buildConversation(100, CHARS_508);
+		const result = assemble(baseInput(raws, compactables, { brief: makeBrief() }));
+		assert.ok(result.keepFromIdx > 0);
+		assert.strictEqual((result.messages[0] as { __ledgerBrief?: true }).__ledgerBrief, true);
+		for (const m of result.messages.slice(1)) {
+			assert.ok(!String((m as { content?: string }).content ?? '').includes('<ledger_notice'));
+		}
+		assert.strictEqual(sectionTokens('notice', result.report.sections), 0);
 	});
 
 	test('fold boundary never splits an assistant→tool pair', () => {
@@ -136,8 +165,11 @@ suite('contextAssembler — assemble', () => {
 		assert.strictEqual(result.keepFromIdx, 6, 'boundary moves past the assistant→tool pair to the next user message');
 		assert.strictEqual(compactables[result.keepFromIdx].role, 'user');
 		assert.ok(raws.length - result.keepFromIdx >= policy.tailMinMessages);
-		// pair (4,5) folded whole; pair (7,8) kept whole in the tail
-		const tail = result.messages as { i: number }[];
+		// brief=null + folding ⇒ the head is the no-brief notice (M6 item 2),
+		// then the tail; pair (4,5) folded whole; pair (7,8) kept whole in the tail
+		const first = result.messages[0] as { role: string; content: string };
+		assert.ok(first.content.startsWith('<ledger_notice'), 'fold without a brief injects the notice head');
+		const tail = result.messages.slice(1) as { i: number }[];
 		assert.deepStrictEqual(tail.map(m => m.i), [6, 7, 8, 9, 10, 11]);
 	});
 
