@@ -10,8 +10,10 @@
 
 | واقعیت | عدد |
 |---|---|
-| فایل‌های src در git | ۹٬۲۹۲ |
-| فایل‌های src روی دیسک (sparse-checkout) | **۷۹۲ (۸.۵٪)** |
+| فایل‌های src در git (هر پسوندی) | ۹٬۲۹۲ |
+| از این‌ها روی دیسک (sparse-checkout) | **۸۹۵ (۹.۶٪)** |
+| فایل‌های `.ts`/`.tsx` در git | ۸٬۰۵۹ |
+| از این‌ها روی دیسک | **۷۹۲ (۹.۸٪)** — از این تعداد ۷۵۴ تا `.ts` و ۳۸ تا `.tsx` |
 | `node_modules` | **صفر پکیج** |
 | نوع کلون | partial (`filter=blob:none`) |
 | `postinstall` | `node build/npm/postinstall.ts` — و `build/` اصلاً checkout نشده |
