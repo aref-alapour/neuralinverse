@@ -55,6 +55,12 @@ import './voidInternalToolService.js'
 // (must load before chatThreadService, which injects it)
 import './contextLedgerService.js'
 
+// Context Ledger recall tools (recall_history / expand_history)
+import './ledgerRecallContrib.js'
+
+// agent memory hybrid retrieval wiring (task M2)
+import './agentMemoryEmbeddingContrib.js'
+
 // bridge void tools into VS Code's ILanguageModelToolsService (Copilot agent mode)
 import './voidToolsBridge.js'
 

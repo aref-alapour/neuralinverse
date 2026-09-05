@@ -487,8 +487,27 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		}
 	}
 
-	getSessionCost(_threadId: string): { totalCost: number; inputTokens: number; outputTokens: number; formattedCost: string } {
-		return { totalCost: 0, inputTokens: 0, outputTokens: 0, formattedCost: '$0.0000' };
+	/**
+	 * Session cost from the last assembler usage report (or message estimates
+	 * before the first ledger send) priced by the model's published rates.
+	 * Estimates until providers surface real usage — see task Q1/M5 phase 4.
+	 */
+	getSessionCost(threadId: string): { totalCost: number; inputTokens: number; outputTokens: number; formattedCost: string } {
+		const { modelSelection } = this._currentModelSelectionProps()
+		if (!modelSelection) return { totalCost: 0, inputTokens: 0, outputTokens: 0, formattedCost: '$0.0000' }
+		let cost = { input: 0, output: 0 }
+		try {
+			const { overridesOfModel } = this._settingsService.state
+			cost = getModelCapabilities(modelSelection.providerName, modelSelection.modelName, overridesOfModel).cost
+		} catch { /* unknown model — zero rates */ }
+		const thread = this._allThreads[threadId]
+		const report = this._ledgerUsageReports.get(threadId)
+		const inputTokens = report
+			? report.totalTokens
+			: (thread?.messages ?? []).reduce((s, m) => s + this.estimateTokens(m.role === 'assistant' ? (m.displayContent ?? '') : (m.content ?? '')), 0)
+		const outputTokens = (thread?.messages ?? []).reduce((s, m) => s + (m.role === 'assistant' ? this.estimateTokens(m.displayContent ?? '') : 0), 0)
+		const totalCost = (inputTokens / 1e6) * cost.input + (outputTokens / 1e6) * cost.output
+		return { totalCost, inputTokens, outputTokens, formattedCost: `$${totalCost.toFixed(4)}` }
 	}
 
 	estimateTokens(text: string): number {
