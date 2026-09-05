@@ -109,11 +109,15 @@ locally ALSO goes upstream as a clean issue/PR.
 
 ## Upstream state (update as things merge)
 
-- #137 PR: agent resolution by id (supersedes #134, was auto-closed when the
-  fork briefly went private) — OPEN, awaiting review
-- #138 PR: updater client-side version guard (supersedes #136; fixes #135
-  item 1) — OPEN, awaiting review
-- #133 / #135 issues: OPEN (both addressed by the PRs above)
+- #139 PR (DRAFT): Context Ledger + editor-agent fixes — src-only carve of
+  the merged fork main; supersedes #137 (agent id) and #138 (updater guard)
+- #140 issue: the four editor-agent tool bugs ({} errors, 3k truncation,
+  question-resumes-task, out-of-workspace reads) — links to #139
+- #137 / #138: CLOSED as superseded by #139
+- #133 / #135 issues: OPEN (both addressed in #139)
+- Fork state: main = ledger + harness merged via fork PR #1; only `main`
+  and `upstream/ledger-and-agent-fixes` remain — 19 stale branches deleted
+  2026-09-05 (tip SHAs preserved as local `refs/backup/*`)
 - Local, not yet PR'd: `feat/agent-conversation-memory` (conversation memory,
   intake questions, stream resilience, pre-send context pipeline, tool-name
   aliases, executor chatMode null). Carve into clean PR(s) after owner OK +
