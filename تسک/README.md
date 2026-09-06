@@ -51,7 +51,7 @@
 | Rules (استاندارد صنعت) | ⚠️ فقط `.neuralinverserules` | [E1](04-ecosystem/01-agents-md-compat.md) | **P0** |
 | Skills / Hooks | ❌ | [E2](04-ecosystem/02-skills-and-hooks.md) | P2 |
 | اجرای CLI/CI (مثل `claude -p`) | ❌ | [E3](04-ecosystem/03-cli-headless.md) | P2 |
-| Usage / هزینه | ❌ هاردکد `$0.0000` | [Q1](05-quality/01-cost-usage-tracking.md) | **P0** |
+| Usage / هزینه | 🟡 هزینه محاسبه می‌شود، ولی جدول قیمت `budgetTracker.ts` فقط ۸ مدل قدیمی دارد (۲۲ provider) | [Q1](05-quality/01-cost-usage-tracking.md) | **P0** |
 | Tab (autocomplete) | ✅ داریم | — | — |
 | Inline edit (Ctrl+K) | ✅ داریم | — | — |
 | Apply / diff | ✅ Fast+Slow داریم | — | — |
@@ -155,17 +155,16 @@ compaction ای که از نظر الگوریتم جلوتر است.
 | M1 | 🟡 | درون M5 | journal = persistence؛ کلید conversationId در فاز ۵ بسته شد؛ تست owner مانده |
 | M2 | 🟡 | درون `feat/context-ledger` | بازیابی hybrid + pin + سقف ۲۰۰۰ پیاده شد؛ تست owner مانده |
 | M3 / M4 | 🔴 | — | روی زیرساخت M5 در session بعدی |
-| **M6** | 🔴 | ادامه‌ی `feat/context-ledger` | شکاف‌های ممیزی ۲۰۲۶-۰۹-۰۵ — **قبل از تست زنده‌ی Ledger** |
-| **Q4** | 🔴 | — | یکپارچگی live-patch — **پیش‌نیاز هر پورت زنده‌ی بعدی** |
-| **Q5** | 🔴 | — | هارنس type-check و تست، بدون build کامل |
+| **M6** | ✅ | `235aef5`, `2c34e79` | سخت‌سازی Ledger بسته شد (فایل تسک ✅)؛ تست زنده‌ی Ledger همچنان مانده (S3 در وضعیت ۲۰۲۶-۰۹-۰۶) |
+| **Q4** | ✅ | `8c6f1e8`, `875e01f`, `c6233c0` | یکپارچگی live-patch بسته شد؛ selftest هفت‌سناریویی + گیت parse اجباری سبز |
+| **Q5** | ✅ | `8c6f1e8`, `cf6412b` | هارنس verify/typecheck-slice/run-tests سبز؛ پوشش محدود به slice (نک. V1/V2 در وضعیت ۲۰۲۶-۰۹-۰۶) |
 
-> **هشدار وضعیت زنده (ممیزی ۲۰۲۶-۰۹-۰۵):** روی برنامه‌ی نصب‌شده فقط سه فیکس کوچک
-> agent اعمال شده (اختلاف bundle با نسخه‌ی pristine: ۳۴۸ بایت). ماژول
-> `globalThis.__niC` — پورت context pipeline از کامیت `2eb53a2` — **صفر مورد** در
-> bundle نصب‌شده دارد، یعنی هرگز ننشسته. علتش این است که `live-patch.py` وقتی الگویی
-> را پیدا نمی‌کند فقط `SKIP` چاپ می‌کند و باز هم `exit 0` می‌دهد. تا
-> [Q4](05-quality/04-live-patch-integrity.md) بسته نشود، هیچ «تست owner روی نسخه‌ی
-> نصبی» معتبر نیست.
+> **وضعیت زنده (به‌روز ۲۰۲۶-۰۹-۰۶):** هشدار ممیزی ۰۹-۰۵ منسوخ شد — Q4 بسته
+> شد و اکنون **۹۷ پچ + ۲ prepend** روی نصب اعمال و `--verify` سبز است
+> (۹۹ OK)، ازجمله فوتر پیام و ابزارها. ماندنی‌ها: Ledger هنوز پورت زنده ندارد
+> (S3)، پچ‌ها به نام‌های مینیفایِ همین بیلد وابسته‌اند و اولین آپدیت رسمی همه
+> را MISSING می‌کند (S1/W4)، و هیچ بیلد کامل از سورس وجود ندارد — رجیستر
+> کامل: [وضعیت پروژه ۲۰۲۶-۰۹-۰۶](05-quality/project-status-and-weaknesses-2026-09-06.md).
 
 ## Definition of Done (برای هر تسک)
 

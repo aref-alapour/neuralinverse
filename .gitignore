@@ -40,3 +40,8 @@ memory/
 
 # python bytecode
 tools/__pycache__/
+
+# local live-patch run logs and scratch (task R5) — never commit
+tools/.verify/*.log
+tools/.verify/*.jpg
+tools/.verify/*.png
