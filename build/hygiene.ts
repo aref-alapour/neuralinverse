@@ -23,6 +23,22 @@ const copyrightHeaderLines = [
 	' *--------------------------------------------------------------------------------------------*/',
 ];
 
+// Files authored by this fork carry their own copyright and the Apache-2.0 licence
+// instead of the upstream Microsoft/MIT header. A header is still mandatory; only the
+// expected text differs. The company name and rule width are matched loosely because
+// the fork currently ships three spellings of its own header — normalising those is
+// tracked separately, and should replace this pattern with exact lines once done.
+const forkCopyrightHeaderPatterns = [
+	/^\/\*-{20,}$/,
+	/^ \*\s+Copyright .*Neural\s?Inverse.*All rights reserved\.$/,
+	/^ \*\s+\S.*$/,
+	/^ \*-{20,}\*\/$/,
+];
+
+function hasForkCopyrightHeader(lines: string[]): boolean {
+	return forkCopyrightHeaderPatterns.every((pattern, i) => pattern.test(lines[i] ?? ''));
+}
+
 interface VinylFileWithLines extends VinylFile {
 	__lines: string[];
 }
@@ -159,12 +175,11 @@ export function hygiene(some: NodeJS.ReadWriteStream | string[] | undefined, run
 	const copyrights = es.through(function (file: VinylFileWithLines) {
 		const lines = file.__lines;
 
-		for (let i = 0; i < copyrightHeaderLines.length; i++) {
-			if (lines[i] !== copyrightHeaderLines[i]) {
-				console.error(file.relative + ': Missing or bad copyright statement');
-				errorCount++;
-				break;
-			}
+		const hasUpstreamHeader = copyrightHeaderLines.every((headerLine, i) => lines[i] === headerLine);
+
+		if (!hasUpstreamHeader && !hasForkCopyrightHeader(lines)) {
+			console.error(file.relative + ': Missing or bad copyright statement');
+			errorCount++;
 		}
 
 		this.emit('data', file);

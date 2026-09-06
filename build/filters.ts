@@ -68,6 +68,16 @@ export const unicodeFilter = Object.freeze<string[]>([
 	// extensions/copilot has its own code style
 	'!extensions/copilot/**',
 
+	// Fork-authored contributions use box-drawing characters as section separators in
+	// comments; that is deliberate house style, not accidental unicode.
+	'!src/vs/workbench/contrib/void/**',
+	'!src/vs/workbench/contrib/neuralInverse/**',
+	'!src/vs/workbench/contrib/neuralInverseChecks/**',
+	'!src/vs/workbench/contrib/neuralInverseEnclave/**',
+	'!src/vs/workbench/contrib/neuralInverseFirmware/**',
+	'!src/vs/workbench/contrib/neuralInverseModernisation/**',
+	'!src/vs/workbench/contrib/powerMode/**',
+
 	'!src/vs/base/browser/dompurify/**',
 	'!src/vs/workbench/services/keybinding/browser/keyboardLayouts/**',
 	'!src/vs/workbench/contrib/terminal/common/scripts/psreadline/**',

@@ -164,14 +164,14 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 
 	private _ledgerRootUri(): URI | undefined {
 		const root = this.workspaceContextService.getWorkspace().folders[0]?.uri;
-		if (!root) return undefined;
+		if (!root) { return undefined; }
 		return URI.joinPath(root, INVERSE_DIR, LEDGER_DIR);
 	}
 
 	/** fsPath of `.inverse` itself — what withInverseWriteAccess unlocks (recursive). */
 	private _inverseDirFsPath(): string | undefined {
 		const root = this.workspaceContextService.getWorkspace().folders[0]?.uri;
-		if (!root) return undefined;
+		if (!root) { return undefined; }
 		return URI.joinPath(root, INVERSE_DIR).fsPath;
 	}
 
@@ -193,7 +193,7 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 
 	private _ensureState(threadId: string): Promise<ILedgerThreadState> {
 		let state = this._states.get(threadId);
-		if (!state) state = this._createState(threadId);
+		if (!state) { state = this._createState(threadId); }
 		// _initState never rejects — failures degrade inside
 		return state.init.then(() => state);
 	}
@@ -261,12 +261,12 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 		let maxNo = 0;
 		for (const child of await this._tryResolveChildren(journalDir)) {
 			const m = JOURNAL_FILE_RE.exec(child.name);
-			if (!m) continue;
+			if (!m) { continue; }
 			const no = parseInt(m[1], 10);
 			state.fileBytes.set(no, child.size);
-			if (no > maxNo) maxNo = no;
+			if (no > maxNo) { maxNo = no; }
 		}
-		if (maxNo === 0) return;
+		if (maxNo === 0) { return; }
 		state.currentFileNo = maxNo;
 		const text = await this._readTextFile(URI.joinPath(journalDir, journalFileName(maxNo))) ?? '';
 		state.journalText = text;
@@ -286,7 +286,7 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 			state.lastEntryTs = last.ts;
 			// crash-before-meta leaves meta.lastSeq behind the journal — adopt
 			// the journal's truth so the tracker never hands out a used seq
-			if (last.seq > state.seq.last) state.seq = new JournalSeq(last.seq);
+			if (last.seq > state.seq.last) { state.seq = new JournalSeq(last.seq); }
 		}
 	}
 
@@ -317,7 +317,7 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 
 	private async _readJsonFile<T>(uri: URI): Promise<T | undefined> {
 		const text = await this._readTextFile(uri);
-		if (text === undefined) return undefined;
+		if (text === undefined) { return undefined; }
 		try {
 			return JSON.parse(text) as T;
 		} catch {
@@ -328,7 +328,7 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 	private async _tryResolveChildren(uri: URI): Promise<{ name: string; size: number }[]> {
 		try {
 			const stat = await this.fileService.resolve(uri);
-			return (stat.children ?? []).map(c => ({ name: c.name, size: c.size }));
+			return (stat.children ?? []).map(c => ({ name: c.name, size: c.size ?? 0 }));
 		} catch {
 			return [];
 		}
@@ -362,14 +362,14 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 			briefRevision: state.briefRevision,
 			schemaVersion: LEDGER_SCHEMA_VERSION,
 		};
-		if (state.metaMigratedAt !== undefined) meta.migratedAt = state.metaMigratedAt;
+		if (state.metaMigratedAt !== undefined) { meta.migratedAt = state.metaMigratedAt; }
 		return meta;
 	}
 
 	// ─── Write queue & flush ──────────────────────────────────────────────────
 
 	private _enqueueWrite(state: ILedgerThreadState, item: IPendingWrite): void {
-		if (state.degraded) return;
+		if (state.degraded) { return; }
 		state.queue.push(item);
 		state.queueBytes += item.line.length + (item.blobContent ? item.blobContent.length : 0);
 		if (state.queueBytes >= FLUSH_BYTES) {
@@ -396,7 +396,7 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 	private async _doFlush(state: ILedgerThreadState): Promise<void> {
 		const items = state.queue.splice(0, state.queue.length);
 		state.queueBytes = 0;
-		if (items.length === 0 || state.degraded) return;
+		if (items.length === 0 || state.degraded) { return; }
 		const root = this._ledgerRootUri();
 		if (!root) {
 			this._degrade(state);
@@ -410,61 +410,61 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 			// the whole flush (journal + blobs + meta) shares one chmod window
 			await withInverseWriteAccess(inversePath, async () => {
 
-			// ── multi-window compare-and-set on meta.lastSeq (see header) ──
-			const diskMeta = await this._readJsonFile<ILedgerThreadMeta>(URI.joinPath(threadDir, META_FILE));
-			if ((diskMeta?.lastSeq ?? 0) !== state.metaLastSeq) {
-				await this._realignFromDisk(state, root, diskMeta, items);
-			}
+				// ── multi-window compare-and-set on meta.lastSeq (see header) ──
+				const diskMeta = await this._readJsonFile<ILedgerThreadMeta>(URI.joinPath(threadDir, META_FILE));
+				if ((diskMeta?.lastSeq ?? 0) !== state.metaLastSeq) {
+					await this._realignFromDisk(state, root, diskMeta, items);
+				}
 
-			// ── journal append with rotation ──
-			await this._ensureFolder(journalDir);
-			if (state.currentFileNo === 0 || shouldRotate(state.journalBytes, this._policy)) {
-				// a fresh file gets a fresh entry cache; the sealed file's
-				// cache stays valid (append-only, never rewritten)
-				state.currentFileNo += 1;
-				state.journalText = '';
-				state.journalBytes = 0;
-				state.fileCache.set(state.currentFileNo, []);
-			}
-			let cache = state.fileCache.get(state.currentFileNo);
-			if (!cache) {
-				cache = decodeEntries(state.journalText);
-				state.fileCache.set(state.currentFileNo, cache);
-			}
-			// rotation is checked once per flush: an unusually large batch may
-			// overshoot one file rather than rotate mid-batch — acceptable and
-			// self-correcting on the next flush
-			let text = state.journalText;
-			let bytes = state.journalBytes;
-			for (const item of items) {
-				text += item.line;
-				bytes += VSBuffer.fromString(item.line).byteLength;
-				cache.push(item.entry);
-			}
-			await this._writeFileAtomic(URI.joinPath(journalDir, journalFileName(state.currentFileNo)), text);
-			state.journalText = text;
-			state.journalBytes = bytes;
-			state.fileBytes.set(state.currentFileNo, bytes);
+				// ── journal append with rotation ──
+				await this._ensureFolder(journalDir);
+				if (state.currentFileNo === 0 || shouldRotate(state.journalBytes, this._policy)) {
+					// a fresh file gets a fresh entry cache; the sealed file's
+					// cache stays valid (append-only, never rewritten)
+					state.currentFileNo += 1;
+					state.journalText = '';
+					state.journalBytes = 0;
+					state.fileCache.set(state.currentFileNo, []);
+				}
+				let cache = state.fileCache.get(state.currentFileNo);
+				if (!cache) {
+					cache = decodeEntries(state.journalText);
+					state.fileCache.set(state.currentFileNo, cache);
+				}
+				// rotation is checked once per flush: an unusually large batch may
+				// overshoot one file rather than rotate mid-batch — acceptable and
+				// self-correcting on the next flush
+				let text = state.journalText;
+				let bytes = state.journalBytes;
+				for (const item of items) {
+					text += item.line;
+					bytes += VSBuffer.fromString(item.line).byteLength;
+					cache.push(item.entry);
+				}
+				await this._writeFileAtomic(URI.joinPath(journalDir, journalFileName(state.currentFileNo)), text);
+				state.journalText = text;
+				state.journalBytes = bytes;
+				state.fileBytes.set(state.currentFileNo, bytes);
 
-			// ── blobs (full bodies of oversized entries) ──
-			for (const item of items) {
-				if (!item.blobContent) continue;
-				const ref = item.entry.blobRef;
-				if (ref === undefined) continue;
-				await this._writeFileAtomic(this._blobUri(threadDir, ref), item.blobContent);
-			}
+				// ── blobs (full bodies of oversized entries) ──
+				for (const item of items) {
+					if (!item.blobContent) { continue; }
+					const ref = item.entry.blobRef;
+					if (ref === undefined) { continue; }
+					await this._writeFileAtomic(this._blobUri(threadDir, ref), item.blobContent);
+				}
 
-			// ── meta last: the CAS anchor commits only after the data ──
-			state.metaLastSeq = state.seq.last;
-			await this._writeFileAtomic(URI.joinPath(threadDir, META_FILE), JSON.stringify(this._metaOf(state), null, 2));
+				// ── meta last: the CAS anchor commits only after the data ──
+				state.metaLastSeq = state.seq.last;
+				await this._writeFileAtomic(URI.joinPath(threadDir, META_FILE), JSON.stringify(this._metaOf(state), null, 2));
 
-			// durable now — drop the entries from the pending overlay
-			for (const item of items) {
-				const idx = state.pending.indexOf(item.entry);
-				if (idx >= 0) state.pending.splice(idx, 1);
-				const ref = item.entry.blobRef;
-				if (ref !== undefined) state.pendingBlobs.delete(ref);
-			}
+				// durable now — drop the entries from the pending overlay
+				for (const item of items) {
+					const idx = state.pending.indexOf(item.entry);
+					if (idx >= 0) { state.pending.splice(idx, 1); }
+					const ref = item.entry.blobRef;
+					if (ref !== undefined) { state.pendingBlobs.delete(ref); }
+				}
 			});
 		} catch {
 			this._degrade(state);
@@ -506,21 +506,21 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 				item.entry.content = resplit.inline;
 				item.entry.blobRef = resplit.blobRef;
 				item.blobContent = resplit.blobRef ? full : undefined;
-				if (resplit.blobRef) state.pendingBlobs.set(resplit.blobRef, full);
+				if (resplit.blobRef) { state.pendingBlobs.set(resplit.blobRef, full); }
 			}
 			item.line = encodeEntry(item.entry) + '\n';
 		};
-		for (const item of items) renumber(item);
-		for (const item of state.queue) renumber(item);
+		for (const item of items) { renumber(item); }
+		for (const item of state.queue) { renumber(item); }
 	}
 
 	// ─── Reads ────────────────────────────────────────────────────────────────
 
 	private async _loadFileEntries(state: ILedgerThreadState, fileNo: number): Promise<ILedgerEntry[]> {
 		const cached = state.fileCache.get(fileNo);
-		if (cached) return cached;
+		if (cached) { return cached; }
 		const root = this._ledgerRootUri();
-		if (!root) return [];
+		if (!root) { return []; }
 		const uri = URI.joinPath(root, state.fsId, JOURNAL_DIR, journalFileName(fileNo));
 		const text = await this._readTextFile(uri);
 		const entries = text === undefined ? [] : decodeEntries(text);
@@ -579,7 +579,7 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 			meta: input.meta ? { ...input.meta } : undefined,
 		};
 		state.pending.push(entry);
-		if (split.blobRef) state.pendingBlobs.set(split.blobRef, input.content);
+		if (split.blobRef) { state.pendingBlobs.set(split.blobRef, input.content); }
 		state.lastEntryTs = entry.ts;
 		this._enqueueWrite(state, { entry, line: encodeEntry(entry) + '\n', blobContent: split.blobRef ? input.content : undefined });
 		return entry;
@@ -591,12 +591,12 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 		if (!state.degraded) {
 			for (let no = 1; no <= state.currentFileNo; no++) {
 				for (const e of await this._loadFileEntries(state, no)) {
-					if (e.seq >= fromSeq && e.seq <= toSeq) entries.push(e);
+					if (e.seq >= fromSeq && e.seq <= toSeq) { entries.push(e); }
 				}
 			}
 		}
 		for (const e of state.pending) {
-			if (e.seq >= fromSeq && e.seq <= toSeq) entries.push(e);
+			if (e.seq >= fromSeq && e.seq <= toSeq) { entries.push(e); }
 		}
 		entries.sort((a, b) => a.seq - b.seq);
 		return this._spliceBlobs(state, entries);
@@ -632,9 +632,9 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 		entries.push(...state.pending);
 		const episodes = await this.listEpisodes(threadId);
 		const core = computeStats(entries, episodes.map(ep => ep.range));
-		if (core.entryCount === 0) return null;
+		if (core.entryCount === 0) { return null; }
 		let journalBytes = 0;
-		for (const size of state.fileBytes.values()) journalBytes += size;
+		for (const size of state.fileBytes.values()) { journalBytes += size; }
 		return {
 			entryCount: core.entryCount,
 			totalTokens: core.totalTokens,
@@ -648,16 +648,16 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 
 	async listEpisodes(threadId: string): Promise<IEpisodeSummary[]> {
 		const state = await this._ensureState(threadId);
-		if (state.episodes) return state.episodes;
+		if (state.episodes) { return state.episodes; }
 		const episodes: IEpisodeSummary[] = [];
 		if (!state.degraded) {
 			const root = this._ledgerRootUri();
 			if (root) {
 				const dir = URI.joinPath(this._threadDirUri(root, state), EPISODES_DIR);
 				for (const child of await this._tryResolveChildren(dir)) {
-					if (!child.name.endsWith('.json')) continue;
+					if (!child.name.endsWith('.json')) { continue; }
 					const ep = await this._readJsonFile<IEpisodeSummary>(URI.joinPath(dir, child.name));
-					if (ep && ep.id && typeof ep.ordinal === 'number' && ep.range) episodes.push(ep);
+					if (ep && ep.id && typeof ep.ordinal === 'number' && ep.range) { episodes.push(ep); }
 				}
 			}
 		}
@@ -718,8 +718,8 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 					briefRevision,
 					schemaVersion: LEDGER_SCHEMA_VERSION,
 				};
-				if (diskMeta?.migratedAt !== undefined) meta.migratedAt = diskMeta.migratedAt;
-				else if (state.metaMigratedAt !== undefined) meta.migratedAt = state.metaMigratedAt;
+				if (diskMeta?.migratedAt !== undefined) { meta.migratedAt = diskMeta.migratedAt; }
+				else if (state.metaMigratedAt !== undefined) { meta.migratedAt = state.metaMigratedAt; }
 				await this._writeFileAtomic(URI.joinPath(this._threadDirUri(root, state), META_FILE), JSON.stringify(meta, null, 2));
 				// the tracker's CAS belief must stay at OUR seq (not the merged
 				// disk value): if disk was AHEAD (another window appended), the
@@ -735,13 +735,13 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 
 	async getBrief(threadId: string): Promise<IWorkingBrief | null> {
 		const state = await this._ensureState(threadId);
-		if (state.brief !== undefined) return state.brief;
+		if (state.brief !== undefined) { return state.brief; }
 		let brief: IWorkingBrief | null = null;
 		if (!state.degraded) {
 			const root = this._ledgerRootUri();
 			if (root) {
 				const loaded = await this._readJsonFile<IWorkingBrief>(URI.joinPath(this._threadDirUri(root, state), BRIEF_FILE));
-				if (loaded && loaded.threadId === threadId) brief = loaded;
+				if (loaded && loaded.threadId === threadId) { brief = loaded; }
 			}
 		}
 		state.brief = brief;
@@ -753,9 +753,9 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 		state.brief = brief;
 		state.briefRevision = Math.max(state.briefRevision, brief.revision);
 		const root = this._ledgerRootUri();
-		if (state.degraded || !root) return;
+		if (state.degraded || !root) { return; }
 		const inversePath = this._inverseDirFsPath();
-		if (!inversePath) return;
+		if (!inversePath) { return; }
 		try {
 			await withInverseWriteAccess(inversePath, async () => {
 				await this._writeFileAtomic(URI.joinPath(this._threadDirUri(root, state), BRIEF_FILE), JSON.stringify(brief, null, 2));
@@ -767,7 +767,7 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 
 	invalidateCaches(threadId: string): void {
 		const state = this._states.get(threadId);
-		if (!state) return;
+		if (!state) { return; }
 		// seq tracker, pending overlay and the live journal buffer stay — they
 		// are write-path state; only the read caches are dropped
 		state.fileCache.clear();
@@ -782,7 +782,7 @@ export class ContextLedgerService extends Disposable implements ILedgerServiceCo
 		// dispose, so fire the flush; whatever loses the race is repaired by
 		// the crash-recovery path on next open.
 		for (const state of this._states.values()) {
-			if (state.flushTimer !== undefined) clearTimeout(state.flushTimer);
+			if (state.flushTimer !== undefined) { clearTimeout(state.flushTimer); }
 			if (state.queue.length > 0 && !state.degraded) {
 				void Promise.resolve(this._flushSoon(state)).catch(() => undefined);
 			}

@@ -157,3 +157,32 @@ test/unit/electron/renderer.js
 test/unit/fullJsonStreamReporter.js
 test/unit/node/index.js
 test/unit/reporter.js
+
+# --- Fork-owned JavaScript, pre-existing and already tracked -------------------
+# Listed so the gate reflects reality instead of failing on every commit. The
+# react/out/* entries are build artifacts whose tracking is itself under review
+# (task Q8/N5: they are git-ignored yet force-tracked); if that review moves them
+# out of the repo, delete their lines here too.
+extensions/open-remote-ssh/extension.webpack.config.js
+scripts/build-llm-bundle.mjs
+server/update-server/dist/handler.js
+src/vs/workbench/contrib/void/browser/llmMessage/llmSdkBundle.js
+src/vs/workbench/contrib/void/browser/react/build.js
+src/vs/workbench/contrib/void/browser/react/out/agent-manager-tsx/index.js
+src/vs/workbench/contrib/void/browser/react/out/diff/index.js
+src/vs/workbench/contrib/void/browser/react/out/neural-inverse-artifact-tsx/index.js
+src/vs/workbench/contrib/void/browser/react/out/quick-edit-tsx/index.js
+src/vs/workbench/contrib/void/browser/react/out/sidebar-tsx/index.js
+src/vs/workbench/contrib/void/browser/react/out/void-editor-widgets-tsx/index.js
+src/vs/workbench/contrib/void/browser/react/out/void-onboarding/index.js
+src/vs/workbench/contrib/void/browser/react/out/void-settings-tsx/index.js
+src/vs/workbench/contrib/void/browser/react/out/void-tooltip/index.js
+src/vs/workbench/contrib/void/browser/react/tailwind.config.js
+src/vs/workbench/contrib/void/browser/react/tsup.config.js
+src/vs/workbench/contrib/void/neuralInverse/browser/backgroundAgentService.js
+tools/.verify/bootstrap.mjs
+tools/.verify/ensure-platform-stubs.mjs
+tools/.verify/stress-test.mjs
+tools/run-tests-standalone.mjs
+tools/typecheck-slice.mjs
+tools/verify.mjs
