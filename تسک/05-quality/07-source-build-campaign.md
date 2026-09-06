@@ -32,6 +32,7 @@
 | ۶ | `build/npm/gyp` روی `node-gyp@11.2.0` پین است که major 18 را نمی‌شناسد (فقط 15/16/17) | **بی‌اثر** — آن نسخه فقط هدر دانلود می‌کند | کاری لازم نیست |
 | ۷ | node-gyp باندل‌شده‌ی npm 11.9.0 نسخه‌ی **12.2.0** است و `versionYear = 2026` دارد | کامپایل native سالم است | کاری لازم نیست |
 | ۸ | `NODE_TLS_REJECT_UNAUTHORIZED=0` در سطح **User** ویندوز ست است | کل نصب روی TLS تأییدنشده می‌رود | خارج از دامنه‌ی این تسک → [Q9](09-tls-verification-disabled.md) |
+| ۱۰ | **کتابخانه‌های Spectre-mitigated نصب نیستند.** `@vscode/deviceid` با `error MSB8040` می‌میرد؛ در MSVC 14.51.36231 پوشه‌ی `lib/spectre` وجود ندارد | `npm ci` بار دوم هم exit 1 داد و دوباره rollback کرد | جزء `Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre` نصب شود — **خودِ همین ریپو در `scripts/install-windows-deps.ps1` این را مستند کرده** («required by @vscode/deviceid»). نیازمند Administrator |
 | ۹ | postinstall `@playwright/browser-chromium` **کل `npm ci` را کشت**: دانلود Chromium Headless Shell روی هر ۴ میرور با timeout سوکت TLS و سپس `Download failure, code=3221225794` شکست خورد → `npm error code 1` → rollback خودکار npm کل `node_modules` را پاک کرد (فقط `@azure` با `EPERM` جا ماند) | فاز ۲ صفر شد | `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` — برای `compile` هیچ لازم نیست |
 
 ## متغیرهای محیطی استاندارد این کمپین
@@ -64,12 +65,33 @@ node build/npm/preinstall.ts
 
 **گیت:** exit 0؛ هدرهای `electron 42.3.0` و `node 24.15.0` در کش node-gyp. **سبز شد.**
 
-### فاز ۲ — نصب کامل وابستگی‌ها 🟡 (تلاش اول شکست خورد، تلاش دوم در حال اجرا)
+### فاز ۲ — نصب کامل وابستگی‌ها 🔴 (دو تلاش، هر دو شکست — **بلاک روی پیش‌نیاز سیستمی**)
 
 > **تلاش اول (۲۰۲۶-۰۹-۰۶ ۲۳:۴۰ → ۰۰:۰۵): شکست.** ۱۱۶۴ پکیج نصب شد، بعد
 > postinstall پلی‌رایت روی دانلود Chromium مرد و **rollback خودکار npm کل
 > `node_modules` را پاک کرد** (به ۱ پوشه‌ی قفل‌شده رسید). درسِ ثبت‌شده: در این
 > ریپو یک postinstall شکست‌خورده = صفر شدن کل نصب، نه یک هشدار.
+
+> **تلاش دوم (۰۰:۰۷ → ۰۰:۳۷): شکست، علت متفاوت.** با
+> `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` دانلود مرورگر رد شد و نصب تا کامپایل native
+> پیش رفت (`Generating code` از MSVC)، اما `@vscode/deviceid` روی
+> `error MSB8040: Spectre-mitigated libraries are required` مرد → `npm error code 1`
+> → **rollback دوباره کل `node_modules` را صفر کرد**.
+> نکته‌ی روش: کد خروجی shell را باور نکن — پوسته exit 0 داد چون آخرین دستور
+> `echo` بود؛ عدد واقعی از `NPM_CI_EXIT=1` در لاگ آمد. همیشه exit خودِ npm ثبت شود.
+
+**پیش‌نیاز قبل از تلاش سوم (نیازمند Administrator):**
+
+```powershell
+# همان کاری که scripts/install-windows-deps.ps1 خودش می‌کند
+& "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe" modify `
+  --installPath "C:\Program Files\Microsoft Visual Studio\18\Community" `
+  --quiet --norestart --add Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre
+```
+
+**گیت این پیش‌نیاز:** پوشه‌ی
+`C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\lib\spectre`
+باید بعد از نصب وجود داشته باشد (الان ندارد).
 
 ```bash
 export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1       # اجباری بعد از شکست تلاش اول
