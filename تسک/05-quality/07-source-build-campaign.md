@@ -1,0 +1,149 @@
+# Q7 — کمپین بیلد کامل از سورس
+
+- **اولویت:** **P0** | **برآورد:** M (اگر بلاکر جدیدی نباشد) | **وضعیت:** 🟡 (فاز ۰ و ۱ بسته، فاز ۲ در حال اجرا)
+- **وابستگی:** ندارد — خودش پیش‌نیازِ V1، V2، S3، D1، D2 و هر تست زنده‌ی Ledger است
+- **شاخه:** `feat/context-ledger` (بدون کامیت کد؛ فقط سند و در صورت لزوم اصلاح toolchain)
+
+## هدف — چرا این تسک P0 است
+
+طبق [رجیستر نقاط ضعف](project-status-and-weaknesses-2026-09-06.md)، **S1** می‌گوید هیچ
+بیلدی از سورس وجود ندارد و تنها مسیر رسیدن کد به کاربر، ۹۷ پچ روی باندل مینیفای
+است. نتیجه‌اش شش ضعف دیگر است که هیچ‌کدام بدون بیلد قابل بستن نیستند:
+
+| ضعف | چرا بدون بیلد بسته نمی‌شود |
+|---|---|
+| **S3** | Ledger هرگز زنده اجرا نشده؛ پیش‌فرضش `true` است |
+| **V1** | ۸۱ فایل تست فقط با `npm run test-node` روی بیلد اجرا می‌شوند |
+| **V2** | type-check واقعیِ react src فقط با toolchain کامل |
+| **D1/D2** | مهاجرت storage و IndexedDB v2 روی داده‌ی واقعی تست نشده |
+| **V4** | فیکس رِیس (`875785e`) فقط در سورس است؛ رفتار نصب‌شده فرق دارد |
+
+## واقعیت‌های محیط — راستی‌آزمایی‌شده ۲۰۲۶-۰۹-۰۶/۰۷
+
+این‌ها حدس نیستند؛ همان شب اجرا و تأیید شدند. هر rerun باید این‌ها را فرض بگیرد:
+
+| # | واقعیت | اثر | راه‌حل تأییدشده |
+|---|---|---|---|
+| ۱ | ریپو **sparse-checkout** بود: `src` فقط ۹۱۱ فایل از ۹۲۹۷؛ `build/`, `extensions/`, `cli/`, `test/` اصلاً روی دیسک نبودند | `npm run compile` اصلاً شروع نمی‌شود | `git sparse-checkout disable` |
+| ۲ | **بودجه‌ی Git LFS ریپو تمام شده** (`exceeded its LFS budget`) و چک‌اوت را نصفه می‌کشد | materialize شکست می‌خورد | `GIT_LFS_SKIP_SMUDGE=1` — هر ۹۷ فایل LFS فقط fixture تست کوپایلت‌اند |
+| ۳ | `.nvmrc` = **24.15.0**؛ node سیستم **25.6.1**؛ هیچ nvm/fnm/volta نصب نیست | گیت `preinstall` **major را دقیقاً برابر** می‌خواهد → رد | `VSCODE_SKIP_NODE_VERSION_CHECK=1` (موقت) — نک. «ریسک باز» |
+| ۴ | `node_modules` عملاً خالی بود: **۹ پکیج**، همه native | نصب کامل لازم است، نه بازسازی ABI | `npm ci` (لاک در ریشه هست → بازتولیدپذیر) |
+| ۵ | فقط **VS Community 2026** (`18.7`) نصب است؛ `preinstall.ts` فقط پوشه‌ی `2019`/`2022` را می‌شناسد | «Invalid C/C++ Compiler Toolchain» | `vs2022_install="C:\Program Files\Microsoft Visual Studio\18\Community"` |
+| ۶ | `build/npm/gyp` روی `node-gyp@11.2.0` پین است که major 18 را نمی‌شناسد (فقط 15/16/17) | **بی‌اثر** — آن نسخه فقط هدر دانلود می‌کند | کاری لازم نیست |
+| ۷ | node-gyp باندل‌شده‌ی npm 11.9.0 نسخه‌ی **12.2.0** است و `versionYear = 2026` دارد | کامپایل native سالم است | کاری لازم نیست |
+| ۸ | `NODE_TLS_REJECT_UNAUTHORIZED=0` در سطح **User** ویندوز ست است | کل نصب روی TLS تأییدنشده می‌رود | خارج از دامنه‌ی این تسک → [Q9](09-tls-verification-disabled.md) |
+| ۹ | postinstall `@playwright/browser-chromium` **کل `npm ci` را کشت**: دانلود Chromium Headless Shell روی هر ۴ میرور با timeout سوکت TLS و سپس `Download failure, code=3221225794` شکست خورد → `npm error code 1` → rollback خودکار npm کل `node_modules` را پاک کرد (فقط `@azure` با `EPERM` جا ماند) | فاز ۲ صفر شد | `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` — برای `compile` هیچ لازم نیست |
+
+## متغیرهای محیطی استاندارد این کمپین
+
+```bash
+export VSCODE_SKIP_NODE_VERSION_CHECK=1
+export vs2022_install="C:\\Program Files\\Microsoft Visual Studio\\18\\Community"
+# فقط در rerun، اگر تست‌های playwright لازم نیست:
+export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+```
+
+## طرح — فازها و گیت هر فاز
+
+### فاز ۰ — materialize درخت ✅ (۲۰۲۶-۰۹-۰۶)
+
+```bash
+git sparse-checkout list > <scratch>/sparse-list-backup.txt   # برای برگشت
+GIT_LFS_SKIP_SMUDGE=1 git sparse-checkout disable
+```
+
+**گیت:** `git config core.sparseCheckout` → `false`؛ `git status --porcelain` خالی؛
+`find src -type f | wc -l` → **۹۳۰۸**؛ `build/` روی دیسک. **همه سبز شد.**
+
+### فاز ۱ — هدرها و پیش‌نیازها ✅ (۲۰۲۶-۰۹-۰۶)
+
+```bash
+npm ci --prefix build/npm/gyp
+node build/npm/preinstall.ts
+```
+
+**گیت:** exit 0؛ هدرهای `electron 42.3.0` و `node 24.15.0` در کش node-gyp. **سبز شد.**
+
+### فاز ۲ — نصب کامل وابستگی‌ها 🟡 (تلاش اول شکست خورد، تلاش دوم در حال اجرا)
+
+> **تلاش اول (۲۰۲۶-۰۹-۰۶ ۲۳:۴۰ → ۰۰:۰۵): شکست.** ۱۱۶۴ پکیج نصب شد، بعد
+> postinstall پلی‌رایت روی دانلود Chromium مرد و **rollback خودکار npm کل
+> `node_modules` را پاک کرد** (به ۱ پوشه‌ی قفل‌شده رسید). درسِ ثبت‌شده: در این
+> ریپو یک postinstall شکست‌خورده = صفر شدن کل نصب، نه یک هشدار.
+
+```bash
+export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1       # اجباری بعد از شکست تلاش اول
+rm -rf node_modules                             # بقایای rollback را پاک کن
+npm ci --foreground-scripts > <log> 2>&1        # هرگز pipe به tail نکن
+```
+
+**گیت:** exit 0 و هیچ خطای کامپایل native (`node-pty`, `kerberos`,
+`native-keymap`, `@vscode/*`, `cpu-features`, `ssh2`).
+**اگر شکست خورد:** اول خطا را طبقه‌بندی کن — اگر ریشه‌اش node 25 است (engines-check
+یا API حذف‌شده)، همان‌جا توقف و **اجازه‌ی نصب Node 24.15.0 از مالک بگیر**.
+
+### فاز ۳ — کامپایل 🔴
+
+```bash
+npm run compile > <log> 2>&1
+```
+
+**گیت:** exit 0 و ساخته شدن `out/`. اگر gulp زیر node 25 شکست، همان تصمیم فاز ۲.
+
+### فاز ۴ — گیت تست واقعی 🔴 (بستن V1)
+
+```bash
+node tools/verify.mjs           # هارنس فعلی — باید همچنان سبز بماند
+npm run test-node > <log> 2>&1  # ۸۱ فایل تستِ تاکنون خاموش
+```
+
+**گیت و قاعده‌ی صداقت:** دو عدد جدا گزارش شود —
+`fail خام` و `fail واقعی = خام − (fail هایی که root cause شان pointer بودنِ فایل LFS است)`.
+هر «LFS-exempt» باید با نام fixture مربوطه اثبات شود، نه ادعا.
+
+### فاز ۵ — اولین اجرای dev، **ایزوله** 🔴 (بستن S3/D1/D2)
+
+```bash
+scripts/code.bat --user-data-dir "<scratch>/ni-dev-userdata" \
+                 --extensions-dir "<scratch>/ni-dev-ext"
+```
+
+**اجباری:** هرگز بدون این دو سوییچ اجرا نشود. `product.json` این فورک
+`nameShort: "NeuralInverse"` است و dev-build می‌تواند با پروفایل واقعیِ نسخه‌ی
+نصب‌شده هم‌مسیر شود؛ این بیلد مهاجرت `contextLedgerEnabled=true` و اسکیمای
+IndexedDB v2 را با خودش دارد و **نباید قبل از تست، داده‌ی چت واقعی کاربر را لمس کند**.
+
+**گیت (تست مالک):** برنامه بالا می‌آید → یک چت واقعی → Ledger مسیر پیش‌فرض است →
+`recall_history` روی گفتگوی قبلی جواب می‌دهد → فوتر مدت‌اجرا دیده می‌شود.
+
+### فاز ۶ — ثبت نتایج 🔴
+
+اعداد واقعی فازهای ۳-۵ در همین فایل و در
+[رجیستر ضعف‌ها](project-status-and-weaknesses-2026-09-06.md) به‌روز شوند
+(V1/V2/S1/S3/D1/D2 با شاهد بسته یا بازتعریف شوند).
+
+## معیارهای پذیرش Q7
+
+- [ ] `out/` وجود دارد و `npm run compile` با exit 0 تمام می‌شود
+- [ ] عدد واقعی `test-node` ثبت شده، با تفکیک fail خام از fail واقعی
+- [ ] بیلد dev با `--user-data-dir` ایزوله بالا آمده و مالک Ledger را زنده دیده
+- [ ] هیچ فایل داده‌ی کاربر واقعی در این کمپین لمس نشده
+- [ ] بلاکرهای این کمپین در جدول «واقعیت‌های محیط» به‌روز مانده‌اند
+
+## ریسک باز — Node 25 به‌جای 24.15.0
+
+`VSCODE_SKIP_NODE_VERSION_CHECK=1` گیت را دور می‌زند، نه مشکل را. ماژول‌های native
+علیه هدرهای **دانلودشده** (Electron 42.3.0 / Node 24.15.0) کامپایل می‌شوند، پس ABI
+خطر اصلی نیست؛ خطر جایی است که اسکریپت‌های بیلد یا engines-check پکیج‌ها روی node 25
+بشکنند. چون هیچ version-manager ای نصب نیست، رفعش = دانلود مستقیم Node 24.15.0 و
+جابه‌جایی PATH → **نیازمند اجازه‌ی صریح مالک**.
+
+## قواعد اجرایی این کمپین
+
+1. **هیچ دستور طولانی‌ای pipe به `tail`/`head` نشود** — بافر می‌کند و پیشرفت را
+   نامرئی می‌کند (اشتباه ثبت‌شده‌ی ۲۰۲۶-۰۹-۰۶). خروجی مستقیم به فایل لاگ.
+2. کارِ طولانی در پس‌زمینه، با ناظر پیشرفتِ خودپایان، و **نتیجه حتماً گزارش شود**
+   — حتی اگر شکست باشد.
+3. تا پایان کمپین، هیچ agent دیگری در همین working tree فایل تغییر ندهد.
+4. برگشت‌پذیری: لیست sparse قبلی بکاپ دارد؛ برای برگشت
+   `git sparse-checkout set --stdin < <backup>`.
