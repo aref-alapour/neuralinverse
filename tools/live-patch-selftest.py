@@ -108,10 +108,17 @@ def main() -> int:
         r = run(root, "--verify")
         check("exit code is 1", r.returncode == 1, f"got {r.returncode}")
         check("__niC module reported MISSING", "MISSING conversation-compactor" in r.stdout, r.stdout[-400:])
-        # on a pristine copy every patch is PENDING except the two-stage
-        # "provider-format fix" (its old only exists after "chatMode null")
+        # on a pristine copy every patch is PENDING except the chained ones
+        # whose `old` only exists after their prerequisite applies:
+        # "provider-format fix" (after "chatMode null"), "transient LLM
+        # errors retry" (after "retry empty LLM responses" — v1 of the
+        # chain), "retryable regex covers connection failures" (inside
+        # the __niC module, which verify doesn't inject — only apply does),
+        # "windows-abs-path v2" (after v1 rewrote the path ternary),
+        # "REPAIR scrollback fallback" (after the ghost-match form applied),
+        # and "inactivity 600s -> 1800s" (after the 600s form applied)
         check("unapplied patches are PENDING, not MISSING",
-              "PENDING" in r.stdout and f"{N_PATCHES - 1} PENDING" in r.stdout, r.stdout[-200:])
+              "PENDING" in r.stdout and f"{N_PATCHES - 6} PENDING" in r.stdout, r.stdout[-200:])
 
         print("scenario 2: apply on pristine → exit 0 + manifest")
         r = run(root)

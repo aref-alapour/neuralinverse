@@ -313,11 +313,15 @@ PATCHES = [
     # Their update API returns the latest release for ANY commit hash, so the
     # client offers (and re-offers forever) the already-installed version.
     # Skip an update whose version equals the installed product.json version.
-    # Pairs with the version stamping below.
+    # Pairs with the version stamping below. The old equality check still
+    # prompted forever when the installed BASE version (e.g. 1.99.3) differs
+    # from the server's MARKETING version (1.1.3) — their updater compares
+    # strings, not semver. Skip whenever the installed version is semver >=
+    # the server's.
     (MAINJS,
-     "updater: skip update whose version matches installed version",
+     "updater: skip update when installed version is semver >= server's",
      'return!i||!i.url||!i.version||!i.productVersion?(this.setState(_e.Idle(s)),Promise.resolve(null)):s===1?(',
-     'return!i||!i.url||!i.version||!i.productVersion||i.version===this.productService.version?(this.setState(_e.Idle(s)),Promise.resolve(null)):s===1?('),
+     'return!i||!i.url||!i.version||!i.productVersion||(function(a,b){try{a=String(a).split(".").map(Number);b=String(b).split(".").map(Number);for(var k=0;k<3;k++){var x=a[k]|0,y=b[k]|0;if(x!==y)return x>y}return!0}catch(_e){return!1}})(this.productService.version,i.version)?(this.setState(_e.Idle(s)),Promise.resolve(null)):s===1?('),
     # ── fix(mcp): tool-call errors serialized to {} — the real message was ──
     # swallowed. _safeCallTool stringified plain Errors with JSON.stringify,
     # which is ALWAYS "{}" for Error (message/stack are non-enumerable), so
@@ -386,7 +390,430 @@ PATCHES = [
      "oss-agent: continuation prompt defers to the user's latest message",
      'Tool succeeded. Continue with the next step using XML tool calls. Do NOT output markdown or explanations.',
      "Tool succeeded. Continue with the next step using XML tool calls. Do NOT output markdown or explanations. (If the user's latest message is a question, answer it in text instead — resume this task only when asked.)"),
+    # ── fix(heavy-work): connection blips killed the run (2026-09-06) ────────
+    # Owner report: "وسط کار سنگین کلا میمیره — قطع میشه وسط چند بار و هیچی
+    # دیگه نمیگه". The main-process truncation guard (task 3 above) already
+    # refuses cut streams on the app, but two gaps remained, now also fixed
+    # in source (common/streamIntegrity.ts + agentExecutor + the electron-main
+    # sendLLMMessage.impl): (1) the retryable classifier didn't recognize
+    # connection-level failures, so OpenAI SDK "Connection error.", "Failed
+    # to fetch", undici "terminated" and EPIPE failed fast instead of using
+    # the retry ladder; (2) the executor retried only EMPTY responses — any
+    # transient error failed the whole step. COMPACTOR_JS above intentionally
+    # keeps its original regex: this patch is the upgrade carrier for both
+    # fresh injections and existing installs (keeps apply/verify idempotent).
+    (BUNDLE,
+     "chat: retryable regex covers connection failures (Connection error/Failed to fetch/terminated/EPIPE)",
+     'function isRetryable(m){if(!m)return false;return /\\b429\\b|rate.?limit|overloaded|quota|timeout|timed out|fetch failed|network|econnreset|econnrefused|enotfound|socket hang up|\\b50[0-4]\\b|service unavailable|internal server|temporarily/i.test(m)}',
+     'function isRetryable(m){if(!m)return false;return /\\b429\\b|rate.?limit|overloaded|quota|timeout|timed out|fetch failed|failed to fetch|network|connection error|connection reset|connection closed|connection terminated|dropped mid-response|stream ended without|socket hang up|terminated|econnreset|econnrefused|econnaborted|enotfound|epipe|\\b50[0-4]\\b|service unavailable|internal server|temporarily/i.test(m)}'),
+    # Executor (workflow agents): transient LLM errors now retry like empty
+    # responses — one connection blip must not fail a heavy step. Chains on
+    # the empty-retry patch's output above, so it must stay after it.
+    (BUNDLE,
+     "executor: transient LLM errors retry instead of failing the step",
+     'let S=null;try{for(var _na=0;_na<=2;_na++){var _nt=await this._callLLM(d);if(_nt&&_nt.trim()){S=_nt;break}s.log(`[${e.id}] empty LLM response (attempt ${_na+1}/3)`)}if(null===S)throw new Error("LLM returned an empty response after 3 attempts")}catch(D){t.status="failed",t.error=`LLM error: ${D.message}`,t.endedAt=Date.now();return}',
+     'let S=null;try{for(var _na=0;_na<=2;_na++){try{var _nt=await this._callLLM(d);if(_nt&&_nt.trim()){S=_nt;break}s.log(`[${e.id}] empty LLM response (attempt ${_na+1}/3)`)}catch(D){if(_na<2&&__niC.isRetryable(D&&D.message)){s.log(`[${e.id}] transient LLM error, retrying (attempt ${_na+1}/3): `+(D&&D.message));await new Promise(r=>setTimeout(r,2500));continue}throw D}}if(null===S)throw new Error("LLM returned an empty response after 3 attempts")}catch(D){t.status="failed",t.error=`LLM error: ${D.message}`,t.endedAt=Date.now();return}'),
+    # Gemini native stream: the same truncation gate the openai-compat impl
+    # got in task 3 — a stream that delivered content but never sent the
+    # terminal finishReason chunk was closed mid-response. Partial text must
+    # not be accepted as the final answer.
+    (MAINJS,
+     "main/impl: track finishReason in gemini stream loop",
+     'for await(const U of oe){const me=U.text??"";O+=me;const N=U.functionCalls;',
+     'for await(const U of oe){var _nG=_nG||!1;U.candidates?.[0]?.finishReason&&(_nG=!0);const me=U.text??"";O+=me;const N=U.functionCalls;'),
+    (MAINJS,
+     "main/impl: premature gemini stream end surfaces a retryable error",
+     'fullError:null});else{j=j.map(me=>({...me,id:me.id||jt()}));',
+     'fullError:null});else if(!_nG&&(O||q||j.length>0))r({message:"The connection to the model dropped mid-response - the stream ended after "+(O.length+q.length)+" characters without a completion marker, so the partial reply was discarded. Retrying.",fullError:null});else{j=j.map(me=>({...me,id:me.id||jt()}));'),
+    # ── fix/tool-reliability (2026-09-06 subagent audit) ─────────────────────
+    # read/write/edit joined EVERY non-`/`-prefixed path onto the workspace
+    # root — but glob/grep/list hand the model fsPath-style Windows absolutes
+    # (`c:\repo\src\a.ts`), so read produced `c:\repo/c:\repo\src\a.ts` →
+    # ENOENT on files the tools themselves had just listed. 3 sites (read,
+    # write, edit) share the identical minified ternary. Source fix:
+    # normalizeToolPath() in toolsService.ts.
+    (BUNDLE,
+     "windows-abs-path (read/write/edit): posix-normalize tool paths",
+     'me.startsWith("/")&&me.startsWith(M)?me:`${M}/${me.replace(/^\\//,"")}`',
+     '(p=>{p=p.replace(/\\\\/g,"/");const r=M.replace(/\\\\/g,"/");return/^[a-zA-Z]:\\//.test(p)||p.startsWith("/")?p:`${r}/${p.replace(/^\\//,"")}`})(me)'),
+    # The context-fit trim loop cut EVERY message to 120 chars — tool results
+    # included — with a raw char slice that landed mid-token (`functions.p...`),
+    # and with OSS contextWindow=4096 the 5k floor made it fire on nearly
+    # every send. Mirrors the source fix in convertToLLMMessageService.ts
+    # (TOOL_TRIM_TO_LEN=4000 + line-boundary cuts). Three independent sites:
+    # the budget, the final cut, and the loop cut.
+    (BUNDLE,
+     "oss tool-trim: role-aware budget (tool results keep 4000 chars)",
+     'B=O.content.length-s6i;if(B>x)',
+     'B=O.content.length-(O.role==="tool"?4e3:s6i);if(B>x)'),
+    (BUNDLE,
+     "oss tool-trim: final cut lands on a line boundary",
+     'O.content=O.content.slice(0,O.content.length-x-3).trim()+"...";break}',
+     'O.content=(s=>{var n=s.lastIndexOf("\\n");return(n>0?s.slice(0,n):s).trim()+"..."})(O.content.slice(0,O.content.length-x-3));break}'),
+    (BUNDLE,
+     "oss tool-trim: loop cut role-aware + line boundary",
+     'O.content=O.content.substring(0,s6i-3)+"..."',
+     'O.content=(s=>{var n=s.lastIndexOf("\\n");return(n>0?s.slice(0,n):s).trim()+"..."})(O.content.substring(0,(O.role==="tool"?4e3:s6i)-3))'),
+    # multi_replace_file_content with `replacement_chunks: "[]"` sailed
+    # through as a silent no-op and still reported success. Mirrors the
+    # validation added in toolsService.ts (plus the per-chunk guards:
+    # empty TargetContent matches at region start — edits the WRONG line —
+    # and a missing ReplacementContent splices literal "undefined").
+    (BUNDLE,
+     "multi_replace: reject empty/invalid chunk arrays",
+     'try{le=JSON.parse(Y)}catch{throw new Error("Invalid JSON for replacement_chunks.")}return a.instantlyApplyReplacementChunks({uri:me,replacementChunks:le})',
+     'try{le=JSON.parse(Y)}catch{throw new Error("Invalid JSON for replacement_chunks.")}if(!Array.isArray(le)||le.length===0)throw new Error("replacement_chunks must be a non-empty JSON array. Each chunk: {StartLine,EndLine,TargetContent,ReplacementContent}.");for(let __ni=0;__ni<le.length;__ni++){const __c=le[__ni];if(!__c||typeof __c.TargetContent!=="string"||__c.TargetContent===""||typeof __c.ReplacementContent!=="string")throw new Error("replacement_chunks["+__ni+"] invalid: TargetContent must be a non-empty string, ReplacementContent a string.")}return a.instantlyApplyReplacementChunks({uri:me,replacementChunks:le})'),
+    # bash tool crash: with no CommandDetection capability (Windows without
+    # shell integration), waitUntilDone pre-resolved WITHOUT setting the
+    # reason — Promise.any then settled with reason undefined → "Unexpected
+    # internal error: Promise.any should have resolved with a reason."
+    # Source fix: terminalToolService.ts (never pre-resolve; let the
+    # inactivity timer govern and read the raw buffer).
+    (BUNDLE,
+     "terminal: no-capability pre-resolve crash (Promise.any)",
+     'new Promise(Q=>{if(!D){Q();return}const q=D.onCommandFinished(oe=>{E||(E={type:"done",exitCode:oe.exitCode??0},x=oe.getOutput()??"",q.dispose(),Q())});v.push(q)});',
+     'new Promise(Q=>{if(!D)return;const q=D.onCommandFinished(oe=>{E||(E={type:"done",exitCode:oe.exitCode??0},x=oe.getOutput()??"",q.dispose(),Q())});v.push(q)});'),
+    # bash tool echo-only output: when command detection fell back to Windows
+    # prompt heuristics, getOutput() is undefined → result stayed "" and the
+    # tool returned only the `$ command` echo. The scrollback fallback only
+    # ran on 'timeout'; extend it to empty 'done' results (before interrupt()
+    # disposes the temp terminal). Source fix: terminalToolService.ts.
+    (BUNDLE,
+     "terminal: scrollback fallback when done has no output",
+     'pe==="timeout"){const Q=p?d.persistentTerminalId:d.terminalId;x=await this.readTerminal(Q)}',
+     '(pe==="timeout"||pe==="done"&&!(x&&x.trim()))){const Q=p?d.persistentTerminalId:d.terminalId;try{x=await this.readTerminal(Q)}catch{}}'),
+    # ── fix/hang-and-leaks (2026-09-06, second audit round) ──────────────────
+    # LEAK [041] (theme-service emitter, grew to 600): any early throw inside
+    # waitForResult (sendText rejection, readTerminal failure) skipped the
+    # interrupt() at the end, so every failed bash call leaked one hidden
+    # TerminalInstance plus its shared-service listeners forever. Source fix:
+    # terminalToolService.ts (resPromise.catch -> interrupt()).
+    (BUNDLE,
+     "terminal: failed commands dispose their hidden terminal (leak)",
+     'return{result:x,resolveReason:E}})();return{interrupt:y,resPromise:C}}',
+     'return{result:x,resolveReason:E}})();return{interrupt:y,resPromise:C.catch(e=>{try{y()}catch(_){}throw e})}}'),
+    # HANG: `new Promise(async resolve => ...)` — when resPromise rejected, the
+    # executor's throw did NOT reject the outer promise (async-executor rules),
+    # so the run_command tool call stayed pending FOREVER and the whole agent
+    # loop froze. This is what made the editor "hang" mid-task. Source fix:
+    # toolsService.ts run_command (reject on failure). Three sites: the
+    # executor gains a reject param, and both await sites route errors to it.
+    (BUNDLE,
+     "run_command: executor gains a reject param (async-executor hang)",
+     'return{result:new Promise(async At=>{const ei=this._currentThreadId',
+     'return{result:new Promise(async(At,__rj)=>{const ei=this._currentThreadId'),
+    (BUNDLE,
+     "run_command: no-bg path rejects the tool promise on failure",
+     'if(!De){const Vn=await bt;Ci.dispose(),At(Vn);return}',
+     'if(!De){try{const Vn=await bt;At(Vn)}catch(__e){Ci.dispose(),__rj(__e);return}Ci.dispose();return}'),
+    (BUNDLE,
+     "run_command: bg_after race rejects the tool promise on failure",
+     'const _i=De*1e3,Tn=await Promise.race([bt.then(Vn=>({kind:"done",r:Vn})),new Promise(Vn=>setTimeout(()=>Vn({kind:"timeout"}),_i))]);if(Ci.dispose(),Tn.kind==="done"){At(Tn.r);return}',
+     'const _i=De*1e3;let Tn;try{Tn=await Promise.race([bt.then(Vn=>({kind:"done",r:Vn})),new Promise(Vn=>setTimeout(()=>Vn({kind:"timeout"}),_i))])}catch(__e){Ci.dispose(),__rj(__e);return}if(Ci.dispose(),Tn.kind==="done"){At(Tn.r);return}'),
+    # Unknown/OSS models defaulted to contextWindow 4096 — the context-fit trim
+    # budget fell to its 5k-char floor and every request re-shredded tool
+    # results. Source fix: modelCapabilities.ts defaultModelOptions.
+    (BUNDLE,
+     "model capabilities: unknown-model contextWindow default 4096 -> 32768",
+     'cmi={contextWindow:4096,reservedOutputTokenSpace:4096',
+     'cmi={contextWindow:32768,reservedOutputTokenSpace:4096'),
+    # SymbolIndex indexed 10k+ files eagerly at startup — 14 minutes of IO
+    # churn + exthost unresponsive cycles in the first minute of every
+    # session. Source fix: workspaceSymbolIndex.ts (deferred 20s).
+    (BUNDLE,
+     "symbol-index: defer the initial full index until the workbench settles",
+     'this._startFullIndex()}isReady',
+     'setTimeout(()=>this._startFullIndex(),2e4)}isReady'),
+    # SymbolIndex follow-up (found by the heavy test): the walk found 235,985
+    # source files in a big workspace and the read+parse phase would churn IO
+    # for hours. Cap the full index at 25k files (normal projects unaffected).
+    # Source fix: workspaceSymbolIndex.ts MAX_INDEX_FILES.
+    (BUNDLE,
+     "symbol-index: cap the full index at 25k files",
+     'this._logService.info(`[SymbolIndex] Indexing ${n.length} files across ${t.length} folders`);for(let s=0;',
+     'this._logService.info(`[SymbolIndex] Indexing ${n.length} files across ${t.length} folders`);n.length>25e3&&(this._logService.warn("[SymbolIndex] capping full index at 25000 of "+n.length+" files"),n.length=25e3);for(let s=0;'),
+    # v2 of the windows-abs-path fix (found by the stress test): v1 treated ANY
+    # single-slash path as absolute — but `/app/functions.php` is the common
+    # model habit for a workspace-RELATIVE file (joining it matches the old
+    # behavior; `file:///app/…` is ENOENT on Windows), and in-root POSIX
+    # absolutes must stay as-is. Chained: its `old` is v1's applied `new`.
+    (BUNDLE,
+     "windows-abs-path v2: single-slash joins to root; in-root absolutes kept",
+     '(p=>{p=p.replace(/\\\\/g,"/");const r=M.replace(/\\\\/g,"/");return/^[a-zA-Z]:\\//.test(p)||p.startsWith("/")?p:`${r}/${p.replace(/^\\//,"")}`})(me)',
+     '(p=>{p=p.replace(/\\\\/g,"/");const r=M.replace(/\\\\/g,"/");return/^\\/?[a-zA-Z]:\\//.test(p)||p.startsWith("//")||p.startsWith("/")&&r.startsWith("/")&&p.toLowerCase().startsWith(r.toLowerCase()+"/")?p:`${r}/${p.replace(/^\\//,"")}`})(me)'),
+    # ── fix/selftest-round-2 (2026-09-06 evening, from the editor's own tool audit) ──
+    # The Power-Mode `bash` tool wrapped every command in
+    # `cd "<ws>" && env CI=true … <cmd>` — Unix syntax. On Windows the agent
+    # terminal is PowerShell, where `&&` and `env` are parser errors, so the
+    # wrapped command died before the user's command ever ran and the tool
+    # returned only the echo line. The temporary terminal is already created
+    # with the workspace cwd — on Windows run the raw command. Source fix:
+    # toolsService.ts bash tool (platform.isWindows branch).
+    (BUNDLE,
+     "bash tool: no unix env/cd wrapper on Windows (PowerShell parser error)",
+     'const De=`void_bash_${Date.now()}`,xe=`cd ${JSON.stringify(M)} && ${Vxs(me)}`',
+     'const De=`void_bash_${Date.now()}`,xe=(globalThis.navigator.platform||"").toLowerCase().includes("win")?me:`cd ${JSON.stringify(M)} && ${Vxs(me)}`'),
+    # MCP: LLM tool params arrive as a map of STRINGS, but MCP servers validate
+    # against their JSON schema and reject mistyped values with -32602
+    # "Invalid Parameters" (clude-memory: every non-stats call failed this
+    # way; stats needs no params, which is why only stats worked). Coerce
+    # params to the schema-declared types before sending. Source fix:
+    # mcpService.ts coerceMCPParamsToSchema.
+    (BUNDLE,
+     "mcp: coerce string params to the tool's input schema (-32602 fix)",
+     'async callMCPTool(e){const t=await this.channel.call("callTool",e);if(t.event==="error")throw new Error(`Error: ${t.text}`);return{result:t}}',
+     'async callMCPTool(e){var _sv=this.state.mcpServerOfName[e.serverName],_tl=_sv&&_sv.tools?_sv.tools.find(function(x){return x.name===e.toolName}):null,_sch=_tl&&_tl.inputSchema;if(e.params&&typeof e.params==="object"&&!Array.isArray(e.params)&&_sch&&_sch.properties){var _o=Object.assign({},e.params);for(var k in _sch.properties){var v=_o[k],p=_sch.properties[k],ty=p&&(Array.isArray(p.type)?p.type[0]:p.type),s;if(typeof v!=="string")continue;s=v.trim();try{if(ty==="number"&&s!==""&&!isNaN(Number(s)))_o[k]=Number(s);else if(ty==="integer"&&!isNaN(parseInt(s,10)))_o[k]=parseInt(s,10);else if(ty==="boolean"&&(s==="true"||s==="false"))_o[k]=s==="true";else if((ty==="object"||ty==="array")&&(s[0]==="{"||s[0]==="[")){var j=JSON.parse(s);if(ty==="array"?Array.isArray(j):j&&typeof j==="object"&&!Array.isArray(j))_o[k]=j}}catch(_e2){}}e=Object.assign({},e,{params:_o})}const t=await this.channel.call("callTool",e);if(t.event==="error")throw new Error(`Error: ${t.text}`);return{result:t}}'),
+    # ── fix/selftest-round-3 (2026-09-06 night — from the inline-JS scan task) ──
+    # REPAIR of the scrollback-fallback patch: on this 1.99.3 bundle the
+    # resolveReason var is E (accessed as E?.type), and the old anchor
+    # `pe==="timeout")` ghost-matched the tail of `E?.ty`+`pe==="timeout"`,
+    # producing `E?.ty(pe is not defined)` at every bash call. Chained: its
+    # `old` only exists after the broken form applied.
+    (BUNDLE,
+     "terminal: REPAIR scrollback fallback (E?.type, not ghost-matched pe)",
+     'E?.ty(pe==="timeout"||pe==="done"&&!(x&&x.trim()))){',
+     '(E?.type==="timeout"||E?.type==="done"&&!(x&&x.trim()))){'),
+    # Power-Mode grep: maxResults 200 with no per-file cap meant a few
+    # match-heavy files ate the whole budget (agent saw "a few root files"
+    # out of ~261). Source fix: browserTools.ts + toolsService.ts grep.
+    (BUNDLE,
+     "grep (power-mode): 1000 results + 15/file cap",
+     'maxResults:200},h=[],p=await e.textSearch(d,void 0,v=>{if("resource"in v){const y=v,S=y.resource.fsPath;if(y.results){for(const C of y.results)if(C.rangeLocations&&C.rangeLocations.length>0){const x=C.rangeLocations[0].source.startLineNumber,E=C.previewText??"";h.push(`${S}:${x}: ${E.trim()}`)}}}}',
+     'maxResults:1e3},h=[],__fc=new Map,p=await e.textSearch(d,void 0,v=>{if("resource"in v){const y=v,S=y.resource.fsPath;if(y.results){for(const C of y.results)if(C.rangeLocations&&C.rangeLocations.length>0){const x=C.rangeLocations[0].source.startLineNumber,E=C.previewText??"";var __n=__fc.get(S)??0;if(__n>=15)continue;__fc.set(S,__n+1),h.push(`${S}:${x}: ${E.trim()}`)}}}}'),
+    # codebase_scan: `push(...spread)` blew the stack on files with tens of
+    # thousands of extracted units (vendored/minified JS inside the PHP
+    # project) — "Maximum call stack size exceeded". forEach-push has no
+    # argument-count limit. Source fix: discoveryService.ts.
+    (BUNDLE,
+     "codebase_scan: loop-push instead of spread-push (stack overflow)",
+     'De.error?E.push(De.error):(d.push(...De.units),h.push(...De.grcViolations),p.push(...De.apiEndpoints),g.push(...De.dataSchemas),v.push(...De.techDebtItems),y.push(...De.regulatedDataHits),S.push(...De.effortEstimates),x[De.lang]=(x[De.lang]??0)+1,k+=De.lineCount,De.lineCount>I&&(I=De.lineCount,M=De.units[0]?.legacyFilePath??""),D.push(...De.dependencyEdges),C.push(...De.callEdges.map(xe=>({...xe,lang:De.lang}))))',
+     'De.error?E.push(De.error):(De.units.forEach(q=>d.push(q)),De.grcViolations.forEach(q=>h.push(q)),De.apiEndpoints.forEach(q=>p.push(q)),De.dataSchemas.forEach(q=>g.push(q)),De.techDebtItems.forEach(q=>v.push(q)),De.regulatedDataHits.forEach(q=>y.push(q)),De.effortEstimates.forEach(q=>S.push(q)),x[De.lang]=(x[De.lang]??0)+1,k+=De.lineCount,De.lineCount>I&&(I=De.lineCount,M=De.units[0]?.legacyFilePath??""),De.dependencyEdges.forEach(q=>D.push(q)),De.callEdges.forEach(q=>C.push({...q,lang:De.lang})))'),
+    # codebase_scan phase 4: find-per-edge over all units = O(n^2) — with
+    # ~10k units the "Resolving dependency graph" phase ran for minutes
+    # ("the smart-tool scan never finished"). Map lookups instead.
+    (BUNDLE,
+     "codebase_scan: phase-4 edge resolution via Map, not find-per-edge",
+     'const O=i2n(d,D);for(const me of O){if(!me.resolved)continue;const Y=d.find(De=>De.id===me.fromId),le=d.find(De=>De.id===me.toId);',
+     'const O=i2n(d,D),__um=new Map(d.map(De=>[De.id,De]));for(const me of O){if(!me.resolved)continue;const Y=__um.get(me.fromId),le=__um.get(me.toId);'),
+    # buildDependencyGraph's edges.some() dedup is O(n^2) over import edges.
+    (BUNDLE,
+     "codebase_scan: dependency-edge dedup via Set",
+     'function i2n(i,e){const t=[],n=new Map,s=new Map;',
+     'function i2n(i,e){const t=[],n=new Map,s=new Map,__seen=new Set;'),
+    (BUNDLE,
+     "codebase_scan: dependency-edge dedup via Set (loop body)",
+     't.some(p=>p.fromId===o&&p.toId===(h??c))||t.push({fromId:o,toId:h??c,importStatement:a,resolved:!!h})}return t}',
+     'var __k=o+"|"+(h??c);__seen.has(__k)||(__seen.add(__k),t.push({fromId:o,toId:h??c,importStatement:a,resolved:!!h}))}return t}'),
+    # ── fix/long-task-timeouts (2026-09-06 night — "2-3h tasks must not die") ──
+    # The kill criterion stays INACTIVITY (a truly hung command still dies),
+    # but 120s of silence killed heavy silent phases (workspace-wide scans)
+    # mid-run. Source fix: prompts.ts MAX_TERMINAL_INACTIVE_TIME 120 → 600.
+    (BUNDLE,
+     "terminal: inactivity timeout 120s -> 600s (long silent phases survive)",
+     'K1e=120,_7e=300',
+     'K1e=600,_7e=300'),
+    # Classifier ceilings fed the same inactivity timer with even tighter caps
+    # (generic/install 2min, lint 1min). Source fix: terminalCommandClassifier.ts.
+    (BUNDLE,
+     "classifier: raise per-category inactivity ceilings (generic 15min, lint 5min)",
+     'Cpt={build:3e5,test:6e5,install:12e4,server:0,lint:6e4,generic:12e4}',
+     'Cpt={build:18e5,test:18e5,install:9e5,server:0,lint:3e5,generic:9e5}'),
+    # bash tool default timeout 120s -> 1h (the docs the model reads quote this
+    # number; the actual kill is the inactivity timer above).
+    (BUNDLE,
+     "bash (power-mode): default timeout 120s -> 1h",
+     'const a=n.description,c=n.timeout??12e4,',
+     'const a=n.description,c=n.timeout??36e5,'),
+    (BUNDLE,
+     "bash (chat): default timeout 120s -> 1h",
+     'executeWithInterrupt(De,xe,le??12e4,B)',
+     'executeWithInterrupt(De,xe,le??36e5,B)'),
+    # ── fix/long-task-timeouts round 2 (user: "2-3h tasks, raise it more") ──
+    # Inactivity 600s -> 1800s (30 min of COMPLETE silence allowed; total runtime
+    # stays unlimited while output flows). Chained on the 600 patch.
+    # Source fix: prompts.ts MAX_TERMINAL_INACTIVE_TIME = 1800.
+    (BUNDLE,
+     "terminal: inactivity timeout 600s -> 1800s (30 min silence tolerance)",
+     'K1e=600,_7e=300',
+     'K1e=18e2,_7e=300'),
+    # run_command's `timeout` param (seconds) was documented but never plumbed —
+    # the model could not actually extend the wait. Now it overrides the
+    # inactivity timer. Source fix: toolsService.ts + terminalToolService.ts.
+    (BUNDLE,
+     "run_command: destructure the timeout param",
+     'run_command:async({command:me,cwd:Y,terminalId:le,bgAfter:De})=>{',
+     'run_command:async({command:me,cwd:Y,terminalId:le,timeout:__to,bgAfter:De})=>{'),
+    (BUNDLE,
+     "run_command: pass timeout through to the terminal",
+     'runCommand(xe,{type:"temporary",cwd:Y,terminalId:le})',
+     'runCommand(xe,{type:"temporary",cwd:Y,terminalId:le,inactivityTimeoutSec:__to})'),
+    (BUNDLE,
+     "terminal: explicit inactivityTimeoutSec wins over classifier",
+     'P=I.timeoutMs>0?Math.min(I.timeoutMs,K1e*1e3):K1e*1e3',
+     'P=d.inactivityTimeoutSec>0?d.inactivityTimeoutSec*1e3:I.timeoutMs>0?Math.min(I.timeoutMs,K1e*1e3):K1e*1e3'),
+    # Teach the MODEL the long-task rule (the description is the policy it follows):
+    # foreground = unbounded while output flows; long/silent tasks -> bg_after or
+    # persistent terminal. (The em-dashes below are literal \\u2014 — the minifier
+    # escapes non-ASCII in template strings.) Source fix: prompts.ts.
+    (BUNDLE,
+     "run_command description: the long-task rule (bg_after / persistent)",
+     'Runs a terminal command and waits for the result (times out after ${K1e}s of inactivity). Use bg_after to watch output for N seconds then automatically promote to a background terminal if still running \\u2014 ideal for downloads, builds, or installs that may take a long time. ',
+     'Runs a terminal command and waits for the result. A command is NEVER killed while it keeps producing output \\u2014 total runtime is unlimited; it is only interrupted after ${K1e}s of COMPLETE silence. For multi-hour or mostly-silent tasks, ALWAYS pass bg_after=N (returns immediately, the result is reported back automatically on completion) or use open_persistent_terminal + run_persistent_command + read_terminal to poll. '),
+    (BUNDLE,
+     "bash schema (chat): document the 1h default + long-task rule",
+     'timeout:{description:"Optional timeout in milliseconds (default: 120000)."}}},read:{',
+     'timeout:{description:"Optional timeout in milliseconds (default: 3600000). Commands are only killed after 1800s of NO output \\u2014 total runtime is unlimited while output flows; for multi-hour silent tasks use bg_after or a persistent terminal."}}},read:{'),
+    (BUNDLE,
+     "bash schema (power-mode): document the 1h default + long-task rule",
+     '{name:"timeout",type:"number",description:"Optional timeout in milliseconds (default: 120000)",required:!1}]',
+     '{name:"timeout",type:"number",description:"Optional timeout in milliseconds (default: 3600000). Killed only after 1800s of NO output \\u2014 total runtime unlimited while output flows; for multi-hour silent tasks use bg_after or a persistent terminal.",required:!1}]'),
+    # ── feat/zcode-style background commands (2026-09-06 night) ────────────────
+    # Persistent (background) terminals resolved after just 8s of silence and
+    # the completion handler then reported "finished" while the command was
+    # still running quietly. 120s quiet window; never kills anything.
+    # Source fix: terminalToolService.ts bgInactivityMs.
+    (BUNDLE,
+     "bg terminals: quiet window 8s -> 120s before reporting output-so-far",
+     'oe=8e3',
+     'oe=12e4'),
+    (BUNDLE,
+     "run_persistent_command description: never blocks, never kills",
+     'Runs a terminal command in the persistent terminal that you created with open_persistent_terminal (results after ${_7e} are returned, and command continues running in background). ',
+     'Runs a terminal command in the persistent terminal that you created with open_persistent_terminal. NEVER blocks and NEVER kills the command \\u2014 total runtime is unlimited (hours are fine). When the command finishes, its output is automatically reported back to you; use read_terminal to check progress in the meantime. '),
+    # New first-class tool: run_background_command (ZCode-style: returns
+    # immediately, cannot time out, completion auto-reported, pollable).
+    # Four insertion patches: schema, validateParams, callTool, stringifier,
+    # plus the terminal-approval registration. Source: toolsService.ts.
+    (BUNDLE,
+     "run_background_command: tool schema",
+     'run_persistent_command:{name:"run_persistent_command",description:',
+     'run_background_command:{name:"run_background_command",description:`Starts a command in a NEW background terminal and returns IMMEDIATELY - it never blocks the conversation and can NEVER time out or be killed (multi-hour runtime is fine). When the command finishes, its output is automatically delivered to you as a [SYSTEM: Background terminal finished] message - do NOT re-run it. Check progress with read_terminal (pass the returned terminal_id), answer prompts with send_command_input. Right tool for builds, installs, workspace-wide scans, test suites, dev servers, anything over a few minutes. `,params:{command:{description:"The terminal command to run."},cwd:{description:wpt}}},run_persistent_command:{name:"run_persistent_command",description:'),
+    (BUNDLE,
+     "run_background_command: validateParams",
+     'run_persistent_command:me=>{const{command:Y,persistent_terminal_id:le}=me,De=Gm("command",Y),xe=MVe(le);return{command:De,persistentTerminalId:xe}}',
+     'run_background_command:me=>{const{command:Y,cwd:le}=me,De=Gm("command",Y),bt=v4("cwd",le);return{command:De,cwd:bt}},run_persistent_command:me=>{const{command:Y,persistent_terminal_id:le}=me,De=Gm("command",Y),xe=MVe(le);return{command:De,persistentTerminalId:xe}}'),
+    (BUNDLE,
+     "run_background_command: callTool",
+     'run_persistent_command:async({command:me,persistentTerminalId:Y})=>{',
+     'run_background_command:async({command:me,cwd:Y})=>{const le=this._injectCoAuthorIfGitCommit(me),De=this._checkCommitGate(le);if(De)return{result:Promise.resolve({resolveReason:{type:"done",exitCode:1},result:De})};const Je=await this.terminalToolService.createPersistentTerminal({cwd:Y}),{resPromise:et}=await this.terminalToolService.runCommand(le,{type:"persistent",persistentTerminalId:Je}),bt=this._currentThreadId;return et.then(r=>{r.resolveReason.type==="done"&&this._onBackgroundTerminalComplete.fire({threadId:bt,command:le,output:r.result,exitCode:r.resolveReason.exitCode??0})}).catch(()=>{this._onBackgroundTerminalComplete.fire({threadId:bt,command:le,output:"Terminal was closed before completing.",exitCode:1})}),{result:Promise.resolve({resolveReason:{type:"done",exitCode:0},result:`Command started in background terminal ${Je}. It can never time out. When it finishes you will receive a [SYSTEM: Background terminal finished] message with its output - do NOT re-run it. Use read_terminal with terminal_id=${Je} to check progress.`})}},run_persistent_command:async({command:me,persistentTerminalId:Y})=>{'),
+    (BUNDLE,
+     "run_background_command: stringOfResult",
+     'run_persistent_command:(me,Y)=>{const{resolveReason:le,result:De}=Y',
+     'run_background_command:(me,Y)=>Y.result,run_persistent_command:(me,Y)=>{const{resolveReason:le,result:De}=Y'),
+    (BUNDLE,
+     "run_background_command: terminal approval registration",
+     'run_command:"terminal",run_persistent_command:"terminal"',
+     'run_command:"terminal",run_background_command:"terminal",run_persistent_command:"terminal"'),
+    # ── fix/clipboard (2026-09-06 night): every copy button wired to ─────────
+    # navigator.clipboard silently failed — Electron denies it for the main
+    # window. Route them through the __niCopy fallback (prepended above).
+    # Source fix: ArtifactView.tsx now uses IClipboardService.
+    (BUNDLE,
+     "clipboard: artifact-view copy -> __niCopy",
+     'd=async()=>{try{await navigator.clipboard.writeText(n),a(!0),setTimeout(()=>a(!1),2e3)}catch(h){console.error(',
+     'd=async()=>{try{await globalThis.__niCopy(n),a(!0),setTimeout(()=>a(!1),2e3)}catch(h){console.error('),
+    (BUNDLE,
+     "clipboard: vllm copy-endpoint -> __niCopy",
+     'run:()=>navigator.clipboard.writeText(o)',
+     'run:()=>globalThis.__niCopy(o)'),
+    (BUNDLE,
+     "clipboard: settings dom copy -> __niCopy",
+     'd.addEventListener("click",()=>{navigator.clipboard.writeText(s),d.textContent="',
+     'd.addEventListener("click",()=>{globalThis.__niCopy(s),d.textContent="'),
+    (BUNDLE,
+     "clipboard: ld-out copy -> __niCopy",
+     'Fe.value&&(navigator.clipboard.writeText(Fe.value),',
+     'Fe.value&&(globalThis.__niCopy(Fe.value),'),
+    (BUNDLE,
+     "clipboard: dma init-sequence copy -> __niCopy",
+     'navigator.clipboard.writeText(z),o.textContent="Copied!"',
+     'globalThis.__niCopy(z),o.textContent="Copied!"'),
+    (BUNDLE,
+     "clipboard: code-snippet copy -> __niCopy",
+     'st=this._btn("Copy",!1,()=>{navigator.clipboard.writeText(Q.codeSnippet),',
+     'st=this._btn("Copy",!1,()=>{globalThis.__niCopy(Q.codeSnippet),'),
+    (BUNDLE,
+     "clipboard: register-value copy -> __niCopy",
+     'C.addEventListener("click",async()=>{await navigator.clipboard.writeText(S.textContent),',
+     'C.addEventListener("click",async()=>{await globalThis.__niCopy(S.textContent),'),
+    # ---- chat message footer (feature): run duration + copy-whole-message ----
+    # `v` is the minified agent-loop start (the same variable the 'Agent Loop
+    # Done' metrics capture uses: duration_ms:Date.now()-v); verified unshadowed
+    # from its definition to both commit sites.
+    (BUNDLE,
+     "chat durationMs: stamp on error-path assistant commit",
+     '{role:"assistant",displayContent:te,reasoning:ge,anthropicReasoning:null}),pe&&pe.name&&pe.name!=="tool_call"',
+     '{role:"assistant",displayContent:te,reasoning:ge,anthropicReasoning:null,durationMs:Date.now()-v}),pe&&pe.name&&pe.name!=="tool_call"'),
+    (BUNDLE,
+     "chat durationMs: stamp on success assistant commit",
+     '{role:"assistant",displayContent:ne.fullText,reasoning:ne.fullReasoning,anthropicReasoning:ne.anthropicReasoning})',
+     '{role:"assistant",displayContent:ne.fullText,reasoning:ne.fullReasoning,anthropicReasoning:ne.anthropicReasoning,durationMs:Date.now()-v})'),
 ]
+
+# The compiled AssistantMessageComponent exists 5x in the bundle (one copy per
+# bundled entry point) with IDENTICAL prop destructuring — chatMessage:i,
+# isCheckpointGhost:e, isCommitted:t, messageIdx:n — but a different jsx
+# runtime alias per copy. Each tail anchor is unique via the name of the
+# component that follows (MTs=/V2s=/kzs=/Kjs=/VJs=). Children go INSIDE the
+# props object (automatic JSX runtime). Inline styles on purpose: the scoped
+# tailwind CSS in the installed build does not know the new classes.
+def _footer_anchor(next_def: str) -> str:
+    return 'isLinkDetectionEnabled:!0})})})]})}),' + next_def
+
+def _footer_replacement(next_def: str, jsx: str) -> str:
+    span = (
+        '(0,' + jsx + '.jsx)("span",{style:{fontSize:"10px",fontFamily:"var(--vscode-editor-font-family,monospace)",'
+        'letterSpacing:"0.05em",textTransform:"uppercase",opacity:0.55,color:"var(--vscode-descriptionForeground)",'
+        'userSelect:"none",cursor:"default"},'
+        'title:"Wall-clock duration of the agent run that produced this message",children:'
+        'i.durationMs>=36e5?Math.floor(i.durationMs/36e5)+"h "+Math.floor(i.durationMs%36e5/6e4)+"m"'
+        ':i.durationMs>=6e4?Math.floor(i.durationMs/6e4)+"m "+Math.floor(i.durationMs%6e4/1e3)+"s"'
+        ':(i.durationMs/1e3).toFixed(1)+"s"})'
+    )
+    button = (
+        '(0,' + jsx + '.jsx)("button",{style:{fontSize:"10px",letterSpacing:"0.05em",textTransform:"uppercase",'
+        'opacity:0.55,color:"var(--vscode-descriptionForeground)",background:"transparent",border:"none",'
+        'padding:"0",cursor:"pointer",userSelect:"none"},title:"Copy this message text",'
+        'onClick:function(ev){var s=((i.displayContent||"").replace(/<system-reminder>[\\s\\S]*?<\\/system-reminder>/g,"")).trim();'
+        '(globalThis.__niCopy||function(x){try{navigator.clipboard&&navigator.clipboard.writeText(x)}catch(e){}})(s);'
+        'var b=ev.currentTarget,o=b.textContent;b.textContent="Copied!";setTimeout(function(){b.textContent=o},1200)},'
+        'children:"Copy"})'
+    )
+    footer = (
+        'i.durationMs>0&&t&&(0,' + jsx + '.jsxs)("div",{style:{display:"flex",alignItems:"center",gap:"4px",'
+        'marginTop:"4px",paddingTop:"2px"},children:[' + span + ',' + button + ']})'
+    )
+    return 'isLinkDetectionEnabled:!0})})}),' + footer + ']})}),' + next_def
+
+for _next_def, _jsx in [
+    ("MTs=iw.default.memo", "yt"),
+    ("V2s=ow.default.memo", "wt"),
+    ("kzs=Wu.default.memo", "tt"),
+    ("Kjs=rw.default.memo", "St"),
+    ("VJs=aw.default.memo", "Ct"),
+]:
+    PATCHES.append((
+        BUNDLE,
+        "chat footer: run duration + copy message (" + _next_def.split("=")[0] + " copy)",
+        _footer_anchor(_next_def),
+        _footer_replacement(_next_def, _jsx),
+    ))
+
+# v1 → v2 chains: a newer patch whose `new` REPLACES an older patch's `new`
+# outright (not an insertion — the older text is gone afterwards), so the
+# older patch would verify as MISSING forever even though its effect simply
+# evolved. Maps superseded patch name → superseding patch name; presence of
+# the superseder's `new` satisfies both apply and verify for the old entry.
+SUPERSEDES = {
+    "executor: retry empty LLM responses instead of finishing '(done)'":
+        "executor: transient LLM errors retry instead of failing the step",
+    "windows-abs-path (read/write/edit): posix-normalize tool paths":
+        "windows-abs-path v2: single-slash joins to root; in-root absolutes kept",
+    "terminal: scrollback fallback when done has no output":
+        "terminal: REPAIR scrollback fallback (E?.type, not ghost-matched pe)",
+    "terminal: inactivity timeout 120s -> 600s (long silent phases survive)":
+        "terminal: inactivity timeout 600s -> 1800s (30 min silence tolerance)",
+}
 
 # Injected runtime module: the ConversationCompactor port (opencode-style
 # pre-send context management), exposed as globalThis.__niC. Prepend once,
@@ -480,10 +907,17 @@ function providerSplit(messages,pn){
 globalThis.__niC={est:est,watchdog:watchdog,isOverflow:isOverflow,isRetryable:isRetryable,capToolResult:capToolResult,forSend:forSend,execCompact:execCompact,providerSplit:providerSplit};
 })();"""
 
-# (file, name, code) prepended idempotently before PATCHES are applied.
+# Electron DENIES navigator.clipboard (clipboard-sanitized-write) for the main
+# window, so every copy button wired to it silently did nothing (the .md
+# artifact viewer's Copy among them). This legacy-path fallback works everywhere.
+CLIPBOARD_FALLBACK_JS = r""";globalThis.__niCopy=function(t){try{var ta=document.createElement("textarea");ta.value=String(t);ta.style.position="fixed";ta.style.opacity="0";document.body.appendChild(ta);ta.select();try{document.execCommand("copy")}catch(e){}document.body.removeChild(ta)}catch(e){}};"""
+# (file, name, sentinel, code) prepended idempotently before PATCHES are applied.
+# The sentinel is a unique marker INSIDE the code — presence means "already injected".
 PREPENDS = [
-    (BUNDLE, "conversation-compactor runtime module (globalThis.__niC)", COMPACTOR_JS),
+    (BUNDLE, "conversation-compactor runtime module (globalThis.__niC)", "globalThis.__niC=", COMPACTOR_JS),
+    (BUNDLE, "clipboard fallback for the main window (globalThis.__niCopy)", "globalThis.__niCopy=", CLIPBOARD_FALLBACK_JS),
 ]
+
 
 
 
@@ -499,6 +933,8 @@ PATCH_SITES = [1] * len(PATCHES)
 for _i, (_f, _name, _old, _new) in enumerate(PATCHES):
     if _name.startswith("executor chatMode null"):
         PATCH_SITES[_i] = 3  # 2 pre-existing + 1 patched site
+    elif _name.startswith("windows-abs-path"):
+        PATCH_SITES[_i] = 3  # one ternary shared by read, write and edit
 
 # Tracked files (relative to the app root) that the manifest hashes.
 TRACKED_RELPATHS = [
@@ -636,6 +1072,18 @@ def _patch_counts(data: str, old: str, new: str) -> tuple:
     return n_new, n_standalone
 
 
+def _superseded_by(data: str, name: str) -> "str | None":
+    """Name of the newer patch (per SUPERSEDES) whose `new` is present in
+    `data` — i.e. this patch's effect was upgraded in place by it."""
+    newer = SUPERSEDES.get(name)
+    if not newer:
+        return None
+    for _f, _name, _old, _new in PATCHES:
+        if _name == newer and data.count(_new) > 0:
+            return newer
+    return None
+
+
 def _read(f: Path) -> str:
     return f.read_text(encoding="utf-8")
 
@@ -653,10 +1101,13 @@ def backup_once(f: Path) -> None:
 def patch_product_json(root: Path) -> list:
     # 1) Drop checksums: patched bundles fail VS Code's core-file integrity
     #    check ("installation appears to be corrupt" dialog).
-    # 2) Stamp the marketing version from their update API onto `version`:
-    #    their builds never bump it (stays at the VS Code base), which —
-    #    together with the updater guard patch — is what stops the endless
-    #    "X is available" banner after installing the latest build.
+    # 2) Stamp the VS Code BASE version, not the marketing version: the fork's
+    #    marketing version (1.1.3) is semver-LOWER than what bundled
+    #    extensions' engines require (^1.91.0), so the markdown/JSON language
+    #    servers failed to activate in EVERY session (exthost logs). 1.127.0
+    #    matches the source tree's package.json. Side effect: the update
+    #    banner may reappear — a fair trade for working language servers and
+    #    extension compatibility.
     product_json = root / "product.json"
     if not product_json.exists():
         return []
@@ -665,10 +1116,26 @@ def patch_product_json(root: Path) -> list:
     if "checksums" in pdata:
         del pdata["checksums"]
         changed.append("checksums removed")
-    latest = latest_release_version()
-    if latest and pdata.get("version") != latest:
-        pdata["version"] = latest
-        changed.append(f"version stamped {latest}")
+    vscode_base = "1.127.0"
+
+    def _satisfies_engines_1_91(v: object) -> bool:
+        # ^1.91.0 means: major > 1, or major == 1 with minor >= 91.
+        # ("1.99.3" qualifies — its MAJOR is 1 and minor is 99; comparing the
+        # first segment against 91 wrongly re-stamped and downgraded it.)
+        try:
+            parts = [int(x) for x in str(v).split(".")[:3]]
+        except Exception:
+            return False
+        while len(parts) < 3:
+            parts.append(0)
+        maj, minor = parts[0], parts[1]
+        return maj > 1 or (maj == 1 and minor >= 91)
+
+    # Only bump versions below the engines floor (^1.91) the bundled language
+    # servers require — never DOWNGRADE a newer base build (e.g. 1.99.3).
+    if not _satisfies_engines_1_91(pdata.get("version")):
+        changed.append(f"version stamped {vscode_base} (VS Code base; was {pdata.get('version')!r})")
+        pdata["version"] = vscode_base
     if changed:
         backup_once(product_json)
         product_json.write_text(
@@ -728,9 +1195,8 @@ def cmd_apply(root: Path, allow_missing: list) -> int:
     }
 
     # Injected runtime modules first (patches below reference them).
-    for f, name, code in PREPENDS:
+    for f, name, sentinel, code in PREPENDS:
         data = _read(f)
-        sentinel = "globalThis.__niC="
         if sentinel in data:
             print(f"ALREADY {name}: sentinel present")
             manifest["prepends"].append({"name": name, "sentinel": sentinel, "status": "already"})
@@ -748,6 +1214,11 @@ def cmd_apply(root: Path, allow_missing: list) -> int:
             manifest["patches"].append({"name": name, "sites": n_new, "status": "already"})
             continue
         if n_standalone == 0 and n_new == 0:
+            sup = _superseded_by(data, name)
+            if sup:
+                print(f"ALREADY {name}: superseded by '{sup}'")
+                manifest["patches"].append({"name": name, "sites": 0, "status": "superseded"})
+                continue
             missing.append(name)
             if name in allowed:
                 print(f"ALLOWED-MISSING {name}: {allowed[name]}")
@@ -780,7 +1251,7 @@ def cmd_apply(root: Path, allow_missing: list) -> int:
 
     print("-" * 72)
     applied = sum(1 for p in manifest["patches"] if p["status"] == "applied")
-    already = sum(1 for p in manifest["patches"] if p["status"] == "already")
+    already = sum(1 for p in manifest["patches"] if p["status"] in ("already", "superseded"))
     allowed_n = len(manifest["allowedMissing"])
     hard_missing = len(missing) - allowed_n
     print(f"summary : {applied} applied, {already} already, "
@@ -801,10 +1272,10 @@ def cmd_verify(root: Path) -> int:
 
     rows = []
     n_ok = n_missing = n_pending = 0
-    for f, name, code in PREPENDS:
-        ok = f.exists() and _read(f).count("globalThis.__niC=") > 0
+    for f, name, sentinel, code in PREPENDS:
+        ok = f.exists() and _read(f).count(sentinel) > 0
         rows.append((("OK      " if ok else "MISSING ") + name,
-                     "sentinel globalThis.__niC= present" if ok else "sentinel globalThis.__niC= NOT found"))
+                     f"sentinel {sentinel} present" if ok else f"sentinel {sentinel} NOT found"))
         n_ok += bool(ok)
         n_missing += not ok
     for (f, name, old, new), sites in zip(PATCHES, PATCH_SITES):
@@ -817,8 +1288,13 @@ def cmd_verify(root: Path) -> int:
             rows.append(("OK      " + name, f"{n_new} site(s)"))
             n_ok += 1
         elif n_new == 0 and n_standalone == 0:
-            rows.append(("MISSING " + name, "pattern not found in either form — bundle drifted or a prerequisite patch is absent"))
-            n_missing += 1
+            sup = _superseded_by(_read(f), name)
+            if sup:
+                rows.append(("OK      " + name, f"superseded by '{sup}'"))
+                n_ok += 1
+            else:
+                rows.append(("MISSING " + name, "pattern not found in either form — bundle drifted or a prerequisite patch is absent"))
+                n_missing += 1
         else:
             rows.append(("PENDING " + name, f"{n_new}/{sites} site(s) applied, {n_standalone} not"))
             n_pending += 1
@@ -921,7 +1397,7 @@ def _rebase(root: Path) -> None:
         except ValueError:
             return p  # not under APP — leave as-is
     PATCHES[:] = [(swap(f), n, o, nw) for (f, n, o, nw) in PATCHES]
-    PREPENDS[:] = [(swap(f), n, c) for (f, n, c) in PREPENDS]
+    PREPENDS[:] = [(swap(f), n, sn, c) for (f, n, sn, c) in PREPENDS]
 
 
 def main() -> int:

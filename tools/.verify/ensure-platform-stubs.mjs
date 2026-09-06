@@ -82,6 +82,17 @@ export interface INotificationService {
 export declare const INotificationService: any;
 export declare enum Severity { Ignore = 0, Info = 1, Warning = 2, Error = 3 }
 `,
+	// exactly the ILogService surface chatThreadService touches (tool-call tracing)
+	'src/vs/platform/log/common/log.d.ts':
+`export interface ILogService {
+	trace(message: string, ...args: any[]): void;
+	debug(message: string, ...args: any[]): void;
+	info(message: string, ...args: any[]): void;
+	warn(message: string, ...args: any[]): void;
+	error(message: string | Error, ...args: any[]): void;
+}
+export declare const ILogService: any;
+`,
 	// language feature registries: only `.ordered` iteration is used
 	'src/vs/editor/common/services/languageFeatures.d.ts':
 `export interface ILanguageFeaturesService {
