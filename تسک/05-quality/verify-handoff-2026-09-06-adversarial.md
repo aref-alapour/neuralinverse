@@ -95,8 +95,11 @@ chat footer: run duration + copy message (VJs copy)
 | شاخه کامل (با tools و docs) | `origin/feat/context-ledger` (جدید روی fork) |
 
 شاخه‌ی PR با `git checkout feat/context-ledger -- src` روی `fdae16d723`
-ساخته شد (کل src جایگزین؛ 34 فایل، بدون tools/AGENTS.local.md/تسک — طبق
-قاعده‌ی carve در `AGENTS.local.md` محلی که در main است).
+ساخته شد (کل src جایگزین؛ **۷۴ فایل** — تصحیح ۲۰۲۶-۰۹-۰۶: عدد «۳۴» در نسخه‌ی
+اول این سند غلط بود؛ `gh pr diff 139 --name-only | wc -l` → ۷۴، شامل ۹ آرتیفکت
+`react/out` و ۹ فایل تست. هر ۷۴ فایل زیر `src/` هستند، پس نشتِ
+tools/AGENTS.local.md/تسک رخ نداده — طبق قاعده‌ی carve در `AGENTS.local.md`
+محلی که در main است).
 
 ## ۲) گیت‌های ولیدیشن — خودت اجرا کن (از ریشه‌ی `C:\Users\jobal\dev\neuralinverse`)
 
@@ -206,7 +209,9 @@ props چون automatic runtime است (`jsx(type, config)` — آرگومان س
 `git checkout feat/context-ledger -- src` — یعنی کل src با وضعیت نهایی
 جایگزین شد، نه cherry-pick. نتیجه: هر چیزی که در working treeِ سورس بوده
 (شامل کار دیروزِ هنوز push‌نشده به شاخه‌ی upstream مثل oss-tools/oss-agent)
-هم وارد PR شده. فهرست ۳۴ فایلی ریویو شد؛ بازبینی مستقل در Q7.
+هم وارد PR شده. **دامنه‌ی PR ۷۴ فایل است، ولی ریویوی دستی فقط روی زیرمجموعه‌ی
+۳۴ فایلی انجام شد** — یعنی ~۴۰ فایل بدون بازبینی چشمی وارد PR شده‌اند؛
+بازبینی مستقل در Q7 اجباری است.
 
 **D5 — سایت abort عمداً live-patch نشد.** در HEAD، `abortRunning` هیچ
 loop-start ای در scope ندارد؛ در نصب، پیام‌های abort شده فوتر زمان نمی‌گیرند
