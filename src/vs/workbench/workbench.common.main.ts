@@ -15,8 +15,11 @@ import './browser/workbench.zenMode.contribution.js';
 import './contrib/void/browser/void.contribution.js';
 import './contrib/neuralInverseModernisation/browser/neuralInverseModernisation.contribution.js';
 import './contrib/neuralInverseFirmware/browser/neuralInverseFirmware.contribution.js';
-import './contrib/neuralInverseChecks/browser/neuralInverseChecks.contribution.js';
-import './contrib/neuralInverseEnclave/browser/neuralInverseEnclave.contribution.js';
+// Checks and Enclave are not built yet: their UI parts are written against 9 and 15
+// services respectively that do not exist in the tree (task Q10). They are excluded
+// from the compile in src/tsconfig.json and unregistered here until those land.
+// import './contrib/neuralInverseChecks/browser/neuralInverseChecks.contribution.js';
+// import './contrib/neuralInverseEnclave/browser/neuralInverseEnclave.contribution.js';
 
 // Agent-sessions color tokens — side-effect import so they register in the
 // global color registry and appear in the color-theme JSON schema.

@@ -35,6 +35,10 @@
 	],
 	"exclude": [
 		"vs/workbench/contrib/webview/browser/pre/service-worker.js",
-		"vs/workbench/test/browser/componentFixtures"
+		"vs/workbench/test/browser/componentFixtures",
+		// Not built yet — UI written against services that do not exist (task Q10).
+		// Remove these two lines together with the imports in workbench.common.main.ts.
+		"vs/workbench/contrib/neuralInverseChecks",
+		"vs/workbench/contrib/neuralInverseEnclave"
 	]
 }

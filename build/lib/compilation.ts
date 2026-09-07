@@ -104,12 +104,26 @@ export function createCompile(src: string, { build, emitError, transpileOnly, pr
 	return pipeline;
 }
 
+// Sources that are excluded from src/tsconfig.json must also be kept out of the gulp
+// stream: the tsb transpiler resolves output names from the TypeScript program, so a
+// file that is streamed but not in the program fails with
+// 'Expected fileName to be present in command line'. Keep this list in sync with the
+// "exclude" array in src/tsconfig.json (task Q10).
+const excludedSourceGlobs = [
+	'!src/vs/workbench/contrib/neuralInverseChecks/**',
+	'!src/vs/workbench/contrib/neuralInverseEnclave/**',
+	// Pre-existing: componentFixtures has always been in the tsconfig "exclude" but was
+	// never removed from the stream, which is why `npm run compile` reported 39 of these
+	// failures before any of the Q10 work.
+	'!src/vs/workbench/test/browser/componentFixtures/**',
+];
+
 export function transpileTask(src: string, out: string, esbuild?: boolean): task.StreamTask {
 
 	const task = () => {
 
 		const transpile = createCompile(src, { build: false, emitError: true, transpileOnly: { esbuild: !!esbuild }, preserveEnglish: false });
-		const srcPipe = gulp.src(`${src}/**`, { base: `${src}` });
+		const srcPipe = gulp.src([`${src}/**`, ...excludedSourceGlobs], { base: `${src}` });
 
 		return srcPipe
 			.pipe(transpile())
@@ -131,7 +145,7 @@ export function compileTask(src: string, out: string, build: boolean, options: {
 		// For dev builds we can transpile with esbuild for speed and type-check with tsgo (no emit).
 		// For `build`, keep the full tsb pipeline because the NLS step requires `file.sourceMap`.
 		const compile = createCompile(src, { build, emitError: true, transpileOnly: build ? false : { esbuild: true }, preserveEnglish: !!options.preserveEnglish });
-		const srcPipe = gulp.src(`${src}/**`, { base: `${src}` });
+		const srcPipe = gulp.src([`${src}/**`, ...excludedSourceGlobs], { base: `${src}` });
 		const generator = new MonacoGenerator(false);
 		if (src === 'src') {
 			generator.execute();

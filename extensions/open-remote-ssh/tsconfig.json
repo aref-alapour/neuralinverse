@@ -1,6 +1,10 @@
 {
 	"extends": "../tsconfig.base.json",
 	"compilerOptions": {
+		// The pinned ssh/glob dependency tree ships an lru-cache whose .d.ts is not
+		// assignable to this repo's ES2024 lib (Map iterator variance). Those errors are
+		// in the dependency, not in this extension, so its declarations are not lib-checked.
+		"skipLibCheck": true,
 		"outDir": "./out",
 		"rootDir": "./src",
 	},
