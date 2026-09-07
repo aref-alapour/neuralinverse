@@ -29,6 +29,39 @@
 - **برآورد:** S < نیم روز / M = ۱-۳ روز / L > یک هفته (شامل پورت live-patch)
 - **وضعیت:** 🔴 شروع نشده / 🟡 در حال کار یا ناقص / ✅ انجام + تست‌شده
 
+### تعریف قطعی وضعیت (قاعده‌ی الزامی — بستن R1/N3)
+
+وضعیت **نظر نیست، تابع گیت‌های Definition of Done است**:
+
+| نماد | تعریف |
+|---|---|
+| 🔴 | G1 (پیاده‌سازی روی سورس) شروع نشده یا ناقص است |
+| 🟡 | G1+G2 سبز (کد نوشته و کامیت شده) ولی G3 (اجرای زنده) یا G4 (تست owner) باز است |
+| ✅ | تا G4 سبز — owner روی نسخه‌ی قابل‌اجرا دیده و تأیید کرده |
+
+**چهار شرط «انجام شده» (درس ممیزی ۲۰۲۶-۰۹-۰۸):** وجود فایل پیاده‌سازی به‌تنهایی
+هیچ‌چیز را ثابت نمی‌کند. برای هر ادعا هر چهار مورد لازم است:
+**فایل + ثبت (`registerSingleton`/contribution) + caller واقعی + سناریوی قابل‌مشاهده.**
+سه ممیزی مستقل نشان دادند چک‌کردن فقط مورد اول، هم کد مرده را «آماده» گزارش
+می‌کند و هم «grep پیدا نکرد» را به «وجود ندارد» ترجمه می‌کند.
+
+## ⚠️ بازنگری بنیادی ۲۰۲۶-۰۹-۰۸ — این جدول در برابر سایدبار Void نوشته شده بود
+
+جدول زیر فرض می‌کند سطح محصول ما **سایدبار Void** است. سه ممیزی مستقل نشان دادند
+این فرض دیگر درست نیست:
+
+1. **پایه‌ی ما VS Code ۱.۱۲۷ است** و استک چت بومی آن checkpoint فایلی، gauge مصرف
+   context، plan، مجوز یکپارچه، AGENTS.md/CLAUDE.md، skills، hooks، sub-agent،
+   todo و صف پیام را **از قبل و حرفه‌ای‌تر** دارد.
+2. **`voidModelProvider.ts` مدل‌های BYOLLM ما را به‌عنوان agent پیش‌فرض همان چت
+   بومی ثبت می‌کند** — پس آن قابلیت‌ها بالقوه با موتور خودمان کار می‌کنند، نه با
+   Copilot. سخت‌سازی این پل شد [A7](03-agent-parity/07-native-chat-bridge.md).
+3. برای بسیاری از ردیف‌های زیر، کار درست **«وصل‌کردن» است نه «ساختن»** — و برآوردها
+   باید متناسب کوچک شوند.
+
+**گزارش کامل با شواهد و داوری بین سه ممیزی:**
+[ممیزی تسک‌ها در برابر کد](05-quality/task-vs-code-audit-2026-09-08.md)
+
 ## نقشه‌ی Cursor Parity — کجا ایستاده‌ایم
 
 | قابلیت Cursor | وضعیت فعلی ما | تسک | اولویت |
@@ -36,22 +69,22 @@
 | Memories (خودکار + معنایی) | ⚠️ حافظه‌ی واژگانی، ثبت فقط پایان task | [M2](01-memory/02-vector-retrieval.md) + [M3](01-memory/03-auto-capture-consolidation-ui.md) | P0→P1 |
 | ادامه‌ی گفتگو / resume thread | ❌ حافظه در RAM می‌میرد | [M1](01-memory/01-conversation-persistence.md) | **P0** |
 | @Docs (ایندکس مستندات) | ❌ | [M4](01-memory/04-docs-knowledge-base.md) | P2 |
-| Context: نوار مصرف + شفافیت | ❌ (موتورش هست، UI ندارد) | [C2](02-context/02-context-gauge-ui.md) | **P0** |
+| Context: نوار مصرف + شفافیت | ⭐ ویجت upstream آماده و تست‌شده؛ فقط تغذیه نمی‌شود | [C2](02-context/02-context-gauge-ui.md) | **P0** |
 | @-mentions (@file/@symbol/@web) | ❌ (فقط stage انتخاب) | [C3](02-context/03-at-mentions.md) | P1 |
 | فایل‌های Pinned + Notepads | ❌ | [C4](02-context/04-pinned-context.md) | P1 |
 | درک Codebase (semantic retrieval) | ⚠️ موتور هست، نیمه‌وصل | [C1](02-context/01-wire-context-engine.md) + [C6](02-context/06-smart-auto-context.md) | P0→P1 |
 | Repo map هوشمند | ⚠️ درخت ساده | [C5](02-context/05-repo-map-upgrade.md) | P1 |
 | Compaction خودکار با UX | 🟡 موتور عالی، UX صفر | [C7](02-context/07-compaction-ux.md) | **P0** |
 | گفتگوی بی‌پایان بدون فراموشی (تا ۱۰M+) | ❌ خلاصه بازنویسی می‌شود، بایگانی غیرقابل‌بازیابی | [M5](01-memory/05-context-ledger.md) | **P0** |
-| Background Agents (تسک → PR) | ⚠️ git آماده، **LLM وصل نیست** | [A1](03-agent-parity/01-background-agents-loop.md) | **P0** |
-| Checkpoints (restore فایل) | ⚠️ فقط ایندکس پیام | [A3](03-agent-parity/03-file-checkpoints.md) | P1 |
-| سطح‌های auto-run / مجوز واحد | ⚠️ سه مدل پراکنده؛ executor بدون تأیید | [A4](03-agent-parity/04-unified-permissions.md) | P1 |
-| Plan mode | ❌ (فقط prompt-level) | [A5](03-agent-parity/05-plan-mode.md) | P2 |
-| Composer (planner/worker) | ⚠️ اجزا موجود، الگو نیست | [A6](03-agent-parity/06-multi-agent-composer.md) | P2 |
-| Rules (استاندارد صنعت) | ⚠️ فقط `.neuralinverserules` | [E1](04-ecosystem/01-agents-md-compat.md) | **P0** |
-| Skills / Hooks | ❌ | [E2](04-ecosystem/02-skills-and-hooks.md) | P2 |
+| Background Agents (تسک → PR) | 🔴 LLM وصل نیست **و سرویس ثبت نشده**؛ upstream پوسته‌ی کامل دارد | [A1](03-agent-parity/01-background-agents-loop.md) | **P0** |
+| Checkpoints (restore فایل) | ⭐ **دو پیاده‌سازی کامل داریم** (firmware + upstream)، هیچ‌کدام وصل نیست | [A3](03-agent-parity/03-file-checkpoints.md) | P1 |
+| سطح‌های auto-run / مجوز واحد | ⚠️ چهار مدل پراکنده؛ upstream مرجع آماده دارد | [A4](03-agent-parity/04-unified-permissions.md) | P1 |
+| Plan mode | 🔴 **تله: فلگ set می‌شود، هرگز خوانده نمی‌شود** | [A5](03-agent-parity/05-plan-mode.md) | **P1** |
+| Composer (planner/worker) | ⚠️ sub-agent زنده، ولی ماژول composer ثبت نشده | [A6](03-agent-parity/06-multi-agent-composer.md) | P2 |
+| Rules (استاندارد صنعت) | ⭐ upstream کامل دارد (AGENTS.md/CLAUDE.md)، ما وصل نیستیم | [E1](04-ecosystem/01-agents-md-compat.md) | **P0** |
+| Skills / Hooks | ⭐ upstream هر دو را دارد (`.claude/skills` + hookCompatibility) | [E2](04-ecosystem/02-skills-and-hooks.md) | P2 |
 | اجرای CLI/CI (مثل `claude -p`) | ❌ | [E3](04-ecosystem/03-cli-headless.md) | P2 |
-| Usage / هزینه | 🟡 هزینه محاسبه می‌شود، ولی جدول قیمت `budgetTracker.ts` فقط ۸ مدل قدیمی دارد (۲۲ provider) | [Q1](05-quality/01-cost-usage-tracking.md) | **P0** |
+| Usage / هزینه | 🟡 محاسبه واقعی است، ولی روی desktop اصلاً `usage` نمی‌رسد | [Q1](05-quality/01-cost-usage-tracking.md) + [Q12](05-quality/12-desktop-usage-parity.md) | **P0** |
 | Tab (autocomplete) | ✅ داریم | — | — |
 | Inline edit (Ctrl+K) | ✅ داریم | — | — |
 | Apply / diff | ✅ Fast+Slow داریم | — | — |
@@ -64,13 +97,29 @@ compaction ای که از نظر الگوریتم جلوتر است.
 
 ## ترتیب اجرای پیشنهادی
 
-### دسته‌ی ۱ — برداشت سریع (همین هفته؛ همه S یا S/M)
-هدف: زودترین «حس Cursor» با کمترین ریسک.
-1. **E1** سازگاری AGENTS.md/CLAUDE.md — برد onboarding
-2. **C2** نمایشگر مصرف context
+### دسته‌ی ۰ — پایه‌ریزی (بازنویسی‌شده ۲۰۲۶-۰۹-۰۸؛ جایگزین دسته‌ی ۱ قدیم)
+
+> این پنج مورد قبل از هر feature جدید می‌آیند: دوتای اول کد نمی‌خواهند، و سه‌تای
+> بعدی ورودیِ درست را برای بقیه‌ی بک‌لاگ فراهم می‌کنند.
+
+1. **[Q9](05-quality/09-tls-verification-disabled.md)** — `NODE_TLS_REJECT_UNAUTHORIZED=0`
+   هنوز روی سطح User ست است. تنها P0 امنیتیِ باز، و کد نمی‌خواهد.
+2. **[Q13](05-quality/13-contribution-registration-gate.md)** — تصمیم درباره‌ی
+   contrib ثبت‌نشده. تا این بسته نشود، برآورد A1 و A6 بی‌معنی است.
+3. **[Q12](05-quality/12-desktop-usage-parity.md)** — `usage` روی desktop نمی‌رسد.
+   پیش‌نیاز عددِ درست در Q1 و C2 و M6.
+4. **[A7](03-agent-parity/07-native-chat-bridge.md)** — سخت‌سازی پل چت بومی.
+   بزرگ‌ترین اهرم: A3/A4/A5/C2/C7/E1/E2 را از «ساختن» به «وصل‌کردن» تبدیل می‌کند.
+5. **[A5](03-agent-parity/05-plan-mode.md) بند اول** — یا `getThreadPlanMode` را
+   enforce کن یا ابزارهایش را حذف کن. الان ادعای مهار می‌کند و مهار نمی‌کند.
+
+### دسته‌ی ۱ — برداشت سریع (بعد از دسته‌ی ۰؛ همه S یا S/M)
+هدف: زودترین «حس Cursor» با کمترین ریسک. **بعد از A7 هر پنج مورد کوچک‌تر می‌شوند.**
+1. **E1** سازگاری AGENTS.md/CLAUDE.md — upstream دارد؛ فقط اتصال
+2. **C2** نمایشگر مصرف context — ویجت upstream هست؛ فقط تغذیه
 3. **C7** UX دی compaction (`/compact` + کارت summary)
-4. **Q1** هزینه‌ی واقعی + داشبورد Usage
-5. **Q2** بهداشت کدبیس + ابزار `live-patch --verify`
+4. **Q1** هزینه‌ی واقعی + داشبورد Usage (بعد از Q12)
+5. **Q2** بهداشت کدبیس (۷ فایل `.bak` + یک `.js` مرده) + `live-patch --verify`
 
 ### دسته‌ی ۲ — حافظه (قلب استراتژی؛ ادامه‌ی branch فعلی)
 > **ستون فقرات این دسته [M5](01-memory/05-context-ledger.md) است.** M1 (ماندگاری) در فاز ۰/۵
@@ -155,6 +204,13 @@ compaction ای که از نظر الگوریتم جلوتر است.
 | M1 | 🟡 | درون M5 | journal = persistence؛ کلید conversationId در فاز ۵ بسته شد؛ تست owner مانده |
 | M2 | 🟡 | درون `feat/context-ledger` | بازیابی hybrid + pin + سقف ۲۰۰۰ پیاده شد؛ تست owner مانده |
 | M3 / M4 | 🔴 | — | روی زیرساخت M5 در session بعدی |
+| **A7** | 🔴 | — | **جدید ۰۹-۰۸** — سخت‌سازی پل چت بومی؛ پرلوریج‌ترین تسک بک‌لاگ |
+| **Q12** | 🔴 | — | **جدید ۰۹-۰۸** — `usage` روی desktop نمی‌رسد (P0، برآورد S) |
+| **Q13** | 🔴 | — | **جدید ۰۹-۰۸** — گیت ثبت contribution؛ بلاک‌کننده‌ی A1/A6 |
+| A3 | 🟡 | — | **اصلاح ۰۹-۰۸** — از 🔴؛ دو پیاده‌سازی کامل داریم، دامنه شد «اتصال» |
+| A5 | 🔴 | — | **اصلاح ۰۹-۰۸** — اولویت P2→P1؛ فلگ plan هرگز خوانده نمی‌شود |
+| Q1 | 🟡 | — | **اصلاح ۰۹-۰۸** — از 🔴؛ ادعای هاردکد `$0.0000` باطل شد |
+| G6 | 🔴 | — | **اصلاح ۰۹-۰۸** — از 🟡؛ مارکر به صف دیگری اشاره داشت |
 | **M6** | ✅ | `235aef5`, `2c34e79` | سخت‌سازی Ledger بسته شد (فایل تسک ✅)؛ تست زنده‌ی Ledger همچنان مانده (S3 در وضعیت ۲۰۲۶-۰۹-۰۶) |
 | **Q4** | ✅ | `8c6f1e8`, `875e01f`, `c6233c0` | یکپارچگی live-patch بسته شد؛ selftest هفت‌سناریویی + گیت parse اجباری سبز |
 | **Q5** | ✅ | `8c6f1e8`, `cf6412b` | هارنس verify/typecheck-slice/run-tests سبز؛ پوشش محدود به slice (نک. V1/V2 در وضعیت ۲۰۲۶-۰۹-۰۶) |

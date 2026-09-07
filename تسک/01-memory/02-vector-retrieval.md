@@ -1,7 +1,22 @@
 # M2 — بازیابی برداری حافظه‌ی پایدار (Vector Memory Retrieval)
 
-- **اولویت:** P0 | **برآورد:** M | **وضعیت:** 🔴 شروع نشده | **وابستگی:** —
+- **اولویت:** P0 | **برآورد:** M (باقی‌مانده: S) | **وضعیت:** 🟡 موتور کامل، روی مسیر تزریق نیست | **وابستگی:** —
 - **هم‌ارز در Cursor:** Memories که با معنای کار (نه فقط کلمات) بازیابی می‌شوند
+
+> **اصلاح مارکر ۲۰۲۶-۰۹-۰۸:** از 🔴 به 🟡. موتور hybrid کامل پیاده و تست شده است
+> (`agentMemoryService.ts` — سه مود `hybrid`/`lexical-promoted`/`lexical`، وزن‌های
+> ۰.۵ برداری + ۰.۲ واژگانی + ۰.۲ تازگی + ۰.۱ بسامد، سقف ۲۰۰۰، pin، دلیل تطبیق
+> per-result، ۲۱ تست). **ولی ✅ نیست:** `recallWithReasons` صفر caller خارجی دارد؛
+> مسیر تولیدی هنوز `getContextSummary(1500)` همگام و واژگانی را صدا می‌زند.
+>
+> ```bash
+> grep -rn "recallWithReasons" src --include=*.ts | grep -v agentMemoryService.ts   # صفر
+> grep -n "getContextSummary(1500)" src/vs/workbench/contrib/void/browser/neuralInverseAgentService.ts
+> ```
+>
+> **کار باقی‌مانده تغییر کرد:** نوشتن موتور دوم لازم نیست. فقط (۱) جایگزینی
+> `getContextSummary` با `recallWithReasons` در مسیر تزریق، (۲) backfill بردار برای
+> ورودی‌های قدیمی، (۳) انتخاب معتبر provider، (۴) نمایش «چرا این حافظه آمد».
 
 ## هدف
 جست‌وجوی حافظه‌ی پایدار (`agentMemoryService`) از term-match ساده به hybrid

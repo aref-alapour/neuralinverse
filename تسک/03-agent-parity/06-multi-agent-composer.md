@@ -1,6 +1,25 @@
 # A6 — الگوی Planner/Worker (معادل Composer مولتی‌ایجنت Cursor)
 
-- **اولویت:** P2 | **برآورد:** M/L | **وضعیت:** 🟡 اجزا موجود، الگو نشده | **وابستگی:** A1، A2
+- **اولویت:** P2 | **برآورد:** M/L | **وضعیت:** 🟡 اجزا موجود — ولی نیمی‌شان ثبت نشده‌اند | **وابستگی:** A1، A2، [Q13](../05-quality/13-contribution-registration-gate.md)
+
+> **اصلاح صورت‌مسئله ۲۰۲۶-۰۹-۰۸ — «اجزا موجود» را تفکیک کن:**
+>
+> | جزء | مسیر | زنده؟ |
+> |---|---|---|
+> | `neuralInverseSubAgentService` (۹ نقش، سقف هم‌زمانی) | `contrib/void/browser/` | ✅ ثبت‌شده در `void.contribution.ts:87` |
+> | `workflowOrchestrator` (DAG با `dependsOn`، Kahn، retry) | `contrib/neuralInverse/browser/orchestrator/` | ✅ ترانزیتی از `toolsService.ts:34` |
+> | **`composer/composerModule`** (canvas، nodes، panels، serializer، history) | `contrib/neuralInverse/browser/composer/` | ❌ **مرده** — فقط از `neuralInverse.contribution.ts` که importer ندارد |
+> | `runSubagentTool` upstream | `chat/common/tools/builtinTools/` | ✅ در استک بومی |
+>
+> پس ادعای «کامپوزر بصری از Composer خود Cursor جلوتر است» دربارهٔ کدی است که
+> **در زمان اجرا بارگذاری نمی‌شود**. کیفیت کد بالاست؛ در دسترس کاربر نیست.
+>
+> ```bash
+> grep -rn "composerModule" src --include=*.ts | grep -v contrib/neuralInverse/   # صفر
+> ```
+>
+> **ترتیب درست:** اول Q13 (تصمیم ثبت)، بعد الگوی planner→worker→verifier روی
+> `runSubagentTool` + orchestrator موجود. تا Q13 بسته نشود این تسک روی شن است.
 - **هم‌ارز در Cursor:** Composer — یک planner کار را تجزیه می‌کند، worker ها موازی اجرا می‌کنند
 
 ## هدف

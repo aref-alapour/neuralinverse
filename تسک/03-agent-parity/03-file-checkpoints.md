@@ -1,7 +1,29 @@
 # A3 — چک‌پوینت‌های سطح فایل + Restore (معادل Checkpoints کروسر)
 
-- **اولویت:** P1 | **برآورد:** M | **وضعیت:** 🔴 | **وابستگی:** —
+- **اولویت:** P1 | **برآورد:** ~~M~~ → **S/M (فقط اتصال)** | **وضعیت:** 🟡 دو پیاده‌سازی کامل داریم، هیچ‌کدام به چت وصل نیست | **وابستگی:** —
 - **هم‌ارز در Cursor:** هر پیام agent یک checkpoint از فایل‌ها؛ دکمه‌ی Restore
+
+> **اصلاح مارکر ۲۰۲۶-۰۹-۰۸ — این تسک «ساختن» نیست، «انتخاب و وصل‌کردن» است.**
+> فرض اولیه («فقط checkpoint ایندکسی داریم») غلط بود. الان **دو** پیاده‌سازی
+> کاملِ سطح‌فایل در درخت هست:
+>
+> | منبع | مسیر | مشخصات |
+> |---|---|---|
+> | **خودمان** (contrib ثبت‌شده‌ی firmware) | `neuralInverseFirmware/browser/engine/projectConfig/checkpointService.ts` | `createCheckpoint`/`rewindTo`/`forkFrom`، دیف git-format + `fileSnapshots` کامل برای rewind امن روی باینری، `.inverse/checkpoints/<id>.json`، سقف ۵۰ با هرس خودکار، ابزار `fw_checkpoint_create` |
+> | **upstream ۱.۱۲۷** | `chat/browser/chatEditing/chatEditingCheckpointTimeline.ts` (+`Impl`) و `platform/agentHost/node/agentHostCheckpointService.ts` | timeline با undo/redo، persistence، diff، و نسخه‌ی git-tree برای agent host |
+>
+> `agentRollbackService.ts` در Void (فقط `messageIndex`) نه سومین پیاده‌سازی، بلکه
+> چیزی است که باید **بازنشسته** شود.
+>
+> ```bash
+> grep -n "fw_checkpoint_create" src/vs/workbench/contrib/neuralInverseFirmware/browser/engine/agentTools/firmwareAgentToolService.ts
+> grep -n "fileSnapshots\|rewindTo\|forkFrom" src/vs/workbench/contrib/neuralInverseFirmware/browser/engine/projectConfig/checkpointService.ts
+> ```
+>
+> **دامنه‌ی جدید:** (۱) تصمیم بگیر کدام منبع حقیقت است — پیشنهاد: upstream برای
+> چت بومی، firmware برای مسیر firmware، و بازنشستگی `agentRollbackService`؛
+> (۲) همه‌ی ابزارهای نویسنده‌ی فایل را به ثبت عملیات وصل کن؛ (۳) دکمه‌ی Restore در
+> هر پیام؛ (۴) فایل‌های untracked و باینری را در تست پذیرش بیاور.
 
 ## هدف
 الان rollback فقط «ایندکس پیام» است (`agentRollbackService.ts` — in-memory، بدون
