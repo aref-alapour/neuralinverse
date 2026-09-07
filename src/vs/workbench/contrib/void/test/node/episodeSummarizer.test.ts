@@ -4,9 +4,10 @@
  *--------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { deterministicEpisodeBody, EpisodeSummarizer, parseEpisodeJson } from '../../browser/episodeSummarizer.js';
+import { deterministicEpisodeBody, EpisodeSummarizer, parseEpisodeJson } from '../../common/episodeSummarizer.js';
 import { DEFAULT_LEDGER_POLICY, resolvePolicy } from '../../common/ledgerPolicy.js';
 import { ILedgerEntry, ILedgerStats, LedgerRole } from '../../common/ledgerTypes.js';
+import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -53,6 +54,8 @@ const SMALL_POLICY = resolvePolicy({
 // ---------------------------------------------------------------------------
 
 suite('episodeSummarizer — parseEpisodeJson', () => {
+
+	ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('clean JSON parses with all fields intact', () => {
 		const text = JSON.stringify({
@@ -163,7 +166,12 @@ suite('episodeSummarizer — parseEpisodeJson', () => {
 
 suite('episodeSummarizer — deterministicEpisodeBody', () => {
 
+	ensureNoDisposablesAreLeakedInTestSuite();
+
 	function buildFixture(): ILedgerEntry[] {
+		// the seq counter is module-wide, so reset it: the assertions below name
+		// specific seq numbers and would otherwise depend on suite execution order
+		_seq = 0;
 		return [
 			// seq 1 — two invariant sentences (English markers)
 			makeEntry('user', 'Always use pnpm in this repo. Never force-push to main.'),
@@ -197,8 +205,9 @@ suite('episodeSummarizer — deterministicEpisodeBody', () => {
 	});
 
 	test('invariants are capped at 200 chars', () => {
-		const filler = 'x'.repeat(500);
-		const body = deterministicEpisodeBody([makeEntry('user', `Always log to disk. ${filler}`)]);
+		// one single sentence: no full stop before the end, so the cap actually applies
+		const filler = 'x '.repeat(250);
+		const body = deterministicEpisodeBody([makeEntry('user', `Always log to disk ${filler}end.`)]);
 		assert.strictEqual(body.invariants.length, 1);
 		assert.ok(body.invariants[0]!.length <= 200);
 		assert.ok(body.invariants[0]!.endsWith('…'));
@@ -261,6 +270,8 @@ suite('episodeSummarizer — deterministicEpisodeBody', () => {
 // ---------------------------------------------------------------------------
 
 suite('episodeSummarizer — decideBoundary', () => {
+
+	ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('token threshold: unsummarized tokens at target close with reason tokens', () => {
 		const d = EpisodeSummarizer.decideBoundary(makeStats({ unsummarizedTokens: 100 }), 5, 0, SMALL_POLICY);

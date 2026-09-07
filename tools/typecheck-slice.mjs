@@ -118,7 +118,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
 	const r = typecheckSlice();
 	for (const e of r.sliceErrors.slice(0, 50)) console.error('  ' + e.text);
 	if (r.sliceErrors.length > 50) console.error(`  … ${r.sliceErrors.length - 50} more`);
-	console.log(`type-check : ${r.files.length} files, ${r.lines.toLocaleString()} lines — ${r.sliceErrors.length} error(s)` + (r.outOfSlice ? `, ${r.outOfSlice} out-of-slice dependency diagnostics (sparse-checkout artifacts, ignored)` : ''));
+	console.log(`type-check : ${r.files.length} files, ${r.lines.toLocaleString()} lines — ${r.sliceErrors.length} error(s)` + (r.outOfSlice ? `, ${r.outOfSlice} out-of-slice dependency diagnostics (outside the slice, ignored)` : ''));
 	if (st) console.log(`self-test  : ${st.ok ? 'OK (deliberate error was caught)' : 'FAILED — harness cannot detect errors; results are meaningless'}`);
 	rmSync(TMP_DIR, { recursive: true, force: true });
 	process.exit((r.ok && (!st || st.ok)) ? 0 : 1);
