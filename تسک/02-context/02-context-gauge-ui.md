@@ -1,7 +1,37 @@
 # C2 — نمایشگر مصرف Context (Context Gauge)
 
-- **اولویت:** P0 | **برآورد:** S | **وضعیت:** 🔴 | **وابستگی:** —
+- **اولویت:** P0 | **برآورد:** S | **وضعیت:** 🟡 بک‌اند کامل، صفر UI | **وابستگی:** —
 - **هم‌ارز در Cursor:** نوار «Context: 34k / 200k» + دیدن اینکه دقیقاً چه چیزهایی داخل است
+
+## وضعیت راستی‌آزمایی‌شده (۲۰۲۶-۰۹-۰۷)
+
+**مارکر قبلی 🔴 کهنه بود** — گام ۱ طرح (ساخت `ContextUsageReport`) در جریان کار
+M5 عملاً انجام شده است.
+
+**انجام‌شده:**
+- `IContextUsageReport` تعریف شده: `void/common/ledgerTypes.ts:148`
+- assembler گزارش را با بخش‌های `brief/pinned/recalled/notice/tail` تولید می‌کند:
+  `void/common/contextAssembler.ts:193` (و `:183` برای بخش‌ها)
+- `chatThreadService` آن را per-thread نگه می‌دارد و expose می‌کند:
+  `:244` (map)، `:372` (نوشتن)، `:469` `getLedgerUsageReport()` — که کامنت خودش
+  می‌گوید «consumed by the context gauge (C2)»
+
+**باقی‌مانده — تمام کار UI است:**
+- [ ] `getLedgerUsageReport()` **صفر مصرف‌کننده** دارد (`grep` بیرون از
+      `chatThreadService.ts` هیچ نتیجه‌ای ندارد) → هیچ gauge ای در UI نیست
+- [ ] پاپ‌آور breakdown، رنگ آستانه، پیام بعد از compaction
+
+**دو قید که قبل از شروع باید دید:**
+1. گزارش فقط در **مسیر ledger** تولید می‌شود (`_assembleLedgerThread`). در مسیر
+   legacy compactor هیچ گزارشی ساخته نمی‌شود — یا باید آنجا هم تولید شود یا gauge
+   وقتی ledger خاموش است باید حالت «نامشخص» داشته باشد.
+2. `contextLedgerEnabled` پیش‌فرض `true` است (`voidSettingsTypes.ts:548`)، پس در
+   حالت عادی مسیر ledger فعال است.
+
+**دستور بازتولید:**
+```bash
+grep -rn "getLedgerUsageReport" src/ | grep -v chatThreadService.ts   # → خالی
+```
 
 ## هدف
 در هدر sidebar chat نمایش: `Context: 34.2k / 200k` با کلیک → breakdown کامل اینکه
