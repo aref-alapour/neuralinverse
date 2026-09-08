@@ -890,7 +890,15 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	};
 	private _updateLatestTool = (threadId: string, tool: ChatMessage & { role: 'tool' }) => {
 		const swapped = this._swapOutLatestStreamingToolWithResult(threadId, tool);
-		if (swapped) { return; }
+		if (swapped) {
+			// The swap is an in-place edit, so it bypasses the journal hook in
+			// `_addMessageToThread`. Append the finished call here — this is the
+			// entry that carries the tool's actual output.
+			if (this._ledgerEnabled() && tool.type !== 'running_now') {
+				this._journalMessage(threadId, tool);
+			}
+			return;
+		}
 		this._addMessageToThread(threadId, tool);
 	};
 
@@ -2376,7 +2384,17 @@ We only need to do it for files that were edited since `from`, ie files between 
 		// Context Ledger (task M5): mirror the message into the append-only
 		// journal. Fire-and-forget — the ledger degrades gracefully and must
 		// never block the UI write path.
-		if (this._ledgerEnabled()) { this._journalMessage(threadId, message); }
+		//
+		// A tool message is added first as `running_now`, whose content is the
+		// placeholder "(value not received yet...)", and the real result arrives
+		// later as an in-place edit — which never reaches the journal, because the
+		// journal is append-only and edits do not pass through here. Journaling the
+		// placeholder therefore recorded that a tool ran but never what it returned,
+		// which is the half recall and compaction actually need. Skip it here and
+		// let `_updateLatestTool` append the completed call instead.
+		if (this._ledgerEnabled() && !(message.role === 'tool' && message.type === 'running_now')) {
+			this._journalMessage(threadId, message);
+		}
 	}
 
 	// sets the currently selected message (must be undefined if no message is selected)
