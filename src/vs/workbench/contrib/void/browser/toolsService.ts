@@ -48,8 +48,13 @@ import {
 } from '../../powerMode/browser/tools/advancedTools.js';
 import { IToolContext } from '../../powerMode/common/powerModeTypes.js';
 import { SubAgentRole } from '../common/subAgentTypes.js';
+import { IAgentMemoryService, MemoryEntryType } from './agentMemoryService.js';
 
 const messageOfThrown = (e: unknown): string => e instanceof Error ? e.message : String(e);
+
+// Valid `type` values for memory_write (agentMemoryService.MemoryEntryType);
+// anything else falls back to 'preference' so a bad model value never fails the write.
+const MEMORY_ENTRY_TYPES = new Set<string>(['pattern', 'preference', 'project-fact', 'error-fix', 'tool-usage', 'file-context']);
 
 // The tasks_* tools never read their context argument; this satisfies
 // IToolContext without inventing per-call state.
@@ -429,6 +434,17 @@ export class ToolsService extends Disposable implements IToolsService {
 			return _subAgentService;
 		};
 
+		// Memory engine (M7): the memory tools write to agentMemoryService — the
+		// hybrid engine behind automatic semantic recall — instead of loose files.
+		let _agentMemoryService: IAgentMemoryService | null | undefined;
+		const getAgentMemory = (): IAgentMemoryService | null => {
+			if (_agentMemoryService === undefined) {
+				try { _agentMemoryService = instantiationService.invokeFunction(a => a.get(IAgentMemoryService)); }
+				catch { _agentMemoryService = null; }
+			}
+			return _agentMemoryService;
+		};
+
 		// Context Engine service accessors (lazy-resolved)
 		const _getSymbolIndex = async () => {
 			const { IWorkspaceSymbolIndexService } = await import('../../neuralInverse/browser/context/index/workspaceSymbolIndex.js');
@@ -518,7 +534,8 @@ export class ToolsService extends Disposable implements IToolsService {
 			memory_write: (params: RawToolParamsObj) => {
 				const key = validateStr('key', params.key);
 				const content = validateStr('content', params.content);
-				return { key, content };
+				const type = validateOptionalStr('type', params.type);
+				return { key, content, type: type || undefined };
 			},
 			memory_read: (params: RawToolParamsObj) => {
 				const key = validateStr('key', params.key);
@@ -1030,28 +1047,27 @@ export class ToolsService extends Disposable implements IToolsService {
 					return { result: { result: `Error fetching URL: ${messageOfThrown(err)}` } };
 				}
 			},
-			memory_write: async ({ key, content }) => {
-				const memoryDir = `${workspaceDir}/.void-memory`;
-				const memoryFile = `${memoryDir}/${key}.md`;
-
+			memory_write: async ({ key, content, type }) => {
+				const memory = getAgentMemory();
+				if (!memory) {
+					return { result: { result: 'Error saving memory: memory service unavailable.' } };
+				}
+				const entryType = MEMORY_ENTRY_TYPES.has(type ?? '') ? (type as MemoryEntryType) : 'preference';
 				try {
-					// Ensure directory exists
-					const dirUri = validateURIws(memoryDir);
-					await fileService.createFolder(dirUri).catch(() => { /* already exists */ });
-
-					// Write memory
-					const fileUri = validateURIws(memoryFile);
-					const buffer = VSBuffer.fromString(content);
-					await fileService.writeFile(fileUri, buffer);
-
+					memory.upsertByKey(key, content, entryType);
 					return { result: { result: `Memory saved: ${key}` } };
 				} catch (err) {
 					return { result: { result: `Error saving memory: ${messageOfThrown(err)}` } };
 				}
 			},
 			memory_read: async ({ key }) => {
+				const memory = getAgentMemory();
+				const entry = memory?.findByTag(key);
+				if (entry) {
+					return { result: { result: entry.content } };
+				}
+				// Entries written by the pre-M7 file-based tools still live on disk.
 				const memoryFile = `${workspaceDir}/.void-memory/${key}.md`;
-
 				try {
 					const fileUri = validateURIws(memoryFile);
 					const content = await fileService.readFile(fileUri);

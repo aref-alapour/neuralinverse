@@ -288,3 +288,58 @@ suite('agentMemoryService — recallForPrompt + backfill (M2)', () => {
 		assert.strictEqual(persisted.filter(e => Array.isArray(e.embedding)).length, 2, 'both entries got vectors');
 	});
 });
+
+suite('agentMemoryService — tool upsert by key (M7)', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	const makeService = () => {
+		const stored: Record<string, string> = {};
+		const storage = {
+			get: (key: string) => stored[key],
+			store: (key: string, value: string) => { stored[key] = value; },
+			onWillSaveState: () => ({ dispose: () => { } }),
+		};
+		const service = new AgentMemoryService(storage as never);
+		return { service, stored };
+	};
+
+	test('upsertByKey stores a manual entry findable via findByTag', () => {
+		const { service } = makeService();
+		service.upsertByKey('package_manager', 'always use pnpm, never npm');
+		const entry = service.findByTag('package_manager');
+		assert.ok(entry, 'the entry is retrievable by its key tag');
+		assert.strictEqual(entry!.content, 'always use pnpm, never npm');
+		assert.strictEqual(entry!.source, 'manual');
+		assert.strictEqual(entry!.type, 'preference', 'type defaults to preference');
+	});
+
+	test('upsertByKey with the same key replaces instead of duplicating', () => {
+		const { service } = makeService();
+		service.upsertByKey('package_manager', 'always use npm');
+		service.upsertByKey('package_manager', 'always use pnpm, never npm');
+		assert.strictEqual(service.count, 1, 'one entry after two same-key writes');
+		assert.strictEqual(service.findByTag('package_manager')!.content, 'always use pnpm, never npm');
+	});
+
+	test('upsertByKey with different keys keeps separate entries', () => {
+		const { service } = makeService();
+		service.upsertByKey('package_manager', 'always use pnpm');
+		service.upsertByKey('deploy_day', 'deploys run on fridays', 'project-fact');
+		assert.strictEqual(service.count, 2);
+		assert.strictEqual(service.findByTag('deploy_day')!.type, 'project-fact');
+	});
+
+	test('findByTag returns undefined for an unknown key', () => {
+		const { service } = makeService();
+		service.upsertByKey('package_manager', 'always use pnpm');
+		assert.strictEqual(service.findByTag('nope'), undefined);
+	});
+
+	test('upsertByKey entries flow into recallForPrompt (owner test 2 shape)', async () => {
+		const { service } = makeService();
+		service.upsertByKey('escapezoom-html_package_manager', 'In this project always use pnpm, never npm.');
+		const out = await service.recallForPrompt('do not change the package manager of this project', 1500, 8);
+		assert.ok(out.includes('Agent Memory (1 entries):'), 'the injected block is present');
+		assert.ok(out.includes('pnpm'), 'the stored preference is recalled');
+	});
+});

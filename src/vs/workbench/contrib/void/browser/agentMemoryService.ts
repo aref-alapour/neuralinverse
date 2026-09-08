@@ -48,6 +48,16 @@ export interface IAgentMemoryService {
 	/** Store a new memory */
 	remember(type: MemoryEntryType, content: string, tags?: string[], source?: 'manual' | 'auto'): IAgentMemoryEntry;
 
+	/** First entry stored under the given key tag, if any (tool memory_write / legacy import lookup) */
+	findByTag(tag: string): IAgentMemoryEntry | undefined;
+
+	/**
+	 * Insert or replace the manual entry stored under `key` (task M7): the
+	 * memory_write tool overwrites same-key memories, matching the legacy
+	 * `.void-memory/<key>.md` file semantics.
+	 */
+	upsertByKey(key: string, content: string, type?: MemoryEntryType): IAgentMemoryEntry;
+
 	/** Recall memories relevant to a query (hybrid: vector + term match + recency + access frequency) */
 	recall(query: string, maxResults?: number): Promise<IAgentMemoryEntry[]>;
 
@@ -255,6 +265,19 @@ export class AgentMemoryService extends Disposable implements IAgentMemoryServic
 		this._evictIfNeeded();
 		this._emitChange();
 		return entry;
+	}
+
+	findByTag(tag: string): IAgentMemoryEntry | undefined {
+		for (const entry of this._entries.values()) {
+			if (entry.tags.includes(tag)) { return entry; }
+		}
+		return undefined;
+	}
+
+	upsertByKey(key: string, content: string, type: MemoryEntryType = 'preference'): IAgentMemoryEntry {
+		const existing = this.findByTag(key);
+		if (existing) { this.forget(existing.id); }
+		return this.remember(type, content, [key], 'manual');
 	}
 
 	async recall(query: string, maxResults: number = 10): Promise<IAgentMemoryEntry[]> {

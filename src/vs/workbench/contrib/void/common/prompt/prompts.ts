@@ -494,16 +494,17 @@ export const builtinTools: {
 
 	memory_write: {
 		name: 'memory_write',
-		description: 'Write data to persistent memory that survives across IDE restarts. Use for storing user preferences, project-specific context, or decisions that should be remembered. Memory is stored in the .void-memory directory.',
+		description: 'Save a durable memory that survives IDE restarts and is recalled automatically in future sessions by hybrid semantic matching (vector + keyword + recency). Use for user preferences, project-specific rules, or decisions. Recall is meaning-based — you do NOT need the key to benefit from a memory later; the key is only an id for replacement.',
 		params: {
-			key: { description: 'Unique key for this memory entry (e.g. "user_preference_theme").' },
-			content: { description: 'The content to store (can be text, JSON, etc.).' },
+			key: { description: 'Unique, stable key for this entry (e.g. "package_manager"). Writing again with the same key replaces the previous content.' },
+			content: { description: 'The fact or preference to remember, as a plain self-contained sentence.' },
+			type: { description: 'Optional. One of: pattern, preference, project-fact, error-fix, tool-usage, file-context. Defaults to preference.' },
 		},
 	},
 
 	memory_read: {
 		name: 'memory_read',
-		description: 'Read data from persistent memory. Use to recall information stored in previous sessions.',
+		description: 'Read a memory by its exact key. Usually unnecessary — relevant memories are injected automatically into the "Agent Memory" block of your context. Use only when you need the full content of one specific known key.',
 		params: {
 			key: { description: 'The key of the memory entry to retrieve.' },
 		},
@@ -857,10 +858,10 @@ CRITICAL: Do NOT place your tool calls inside the <thought> block! Tool calls mu
 - **\`query_ni_agent\`** — runs a named Neural Inverse agent from the .inverse/agents/ catalogue (code-reviewer, test-generator, dependency-auditor, release-manager, docs-generator, or user-defined). Each agent has a specialized role, system instructions, and its own allowed tool set. Use \`agentId: "list"\` to discover available agents.
 
 **Workflow tools:**
-	- \`web_fetch\` — fetch external documentation, API references, standards, or web content (automatically strips HTML, 30s timeout, 100KB limit)
-	- \`ask_user\` — pause execution and ask the user a question when you need a decision or clarification you cannot assume
-	- \`memory_write\` / \`memory_read\` — persist information across sessions (use for user preferences, project-specific decisions, or context that should survive IDE restarts)
-	- \`tasks_create\` / \`tasks_list\` / \`tasks_update\` / \`tasks_get\` — track multi-step workflows, background tasks, or async work items
+\t- \`web_fetch\` — fetch external documentation, API references, standards, or web content (automatically strips HTML, 30s timeout, 100KB limit)
+\t- \`ask_user\` — pause execution and ask the user a question when you need a decision or clarification you cannot assume
+\t- \`memory_write\` — persist information across sessions (user preferences, project-specific decisions, context that should survive IDE restarts). Memories are recalled automatically by semantic matching — write them as plain self-contained sentences; \`memory_read\` by key is rarely needed
+\t- \`tasks_create\` / \`tasks_list\` / \`tasks_update\` / \`tasks_get\` — track multi-step workflows, background tasks, or async work items
 
 **Parallel sub-agent execution** — \`ask_powermode\` and \`query_ni_agent\` run as independent sub-agents. You can call them in the same response and they execute simultaneously.
 - Before commit → call \`grc_blocking_violations\` + \`ask_powermode "does the build pass?"\` in parallel.

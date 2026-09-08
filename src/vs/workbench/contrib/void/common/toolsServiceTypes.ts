@@ -70,7 +70,7 @@ export type BuiltinToolCallParams = {
 	// --- Workflow tools ---
 	'ask_user': { question: string };
 	'web_fetch': { url: string; description: string };
-	'memory_write': { key: string; content: string };
+	'memory_write': { key: string; content: string; type: string | undefined };
 	'memory_read': { key: string };
 	'tasks_create': { title: string; description: string | null };
 	'tasks_list': {};

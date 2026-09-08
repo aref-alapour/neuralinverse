@@ -61,6 +61,9 @@ import './ledgerRecallContrib.js';
 // agent memory hybrid retrieval wiring (task M2)
 import './agentMemoryEmbeddingContrib.js';
 
+// one-time import of legacy .void-memory files into the memory engine (task M7)
+import './agentMemoryLegacyImportContrib.js';
+
 // bridge void tools into VS Code's ILanguageModelToolsService (Copilot agent mode)
 import './voidToolsBridge.js';
 
