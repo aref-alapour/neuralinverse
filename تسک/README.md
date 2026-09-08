@@ -202,6 +202,8 @@ compaction ای که از نظر الگوریتم جلوتر است.
 | تسک | وضعیت | شاخه (branch) | یادداشت |
 |---|---|---|---|
 | M5 | 🟡 | `feat/context-ledger` | فازهای ۰-۳ و ۵ روی سورس کامل + تست standalone؛ پورت live-patch و تست owner مانده (بند ۱۳ تسک) |
+| **M7** | 🟡 | `feat/context-ledger` | **موج ۴ (۰۹-۰۹):** دو سیستم حافظه یکی شد (گزینه‌ی الف؛ ابزارها روی موتور M2 + مهاجرت غیرمخرب `.void-memory`) + ۵ تست؛ تست owner با بیلد نصبی مانده |
+| **A8** | 🟡 | `feat/context-ledger` | **موج ۴ (۰۹-۰۹):** هر دو شکاف پاریتی چت بومی بسته شد (حافظه‌ی hybrid با کوئری از پیام کاربر + اجرای ابزارهای recall) + تست پاریتی ۵لنگری در verify (۱۵۱ تست)؛ تست owner با بیلد نصبی مانده |
 | M1 | 🟡 | درون M5 | journal = persistence؛ کلید conversationId در فاز ۵ بسته شد؛ تست owner مانده |
 | M2 | 🟡 | درون `feat/context-ledger` | **موج ۳ (۰۹-۰۸):** recall روی مسیر تزریق وصل شد (کوئری از task+working memory) + backfill + provider معتبر؛ تست owner مانده |
 | M3 / M4 | 🔴 | — | روی زیرساخت M5 در session بعدی |
