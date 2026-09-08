@@ -175,15 +175,28 @@ voidModelProvider.ts همین حالا حلقه‌ی tool-call بومی را ب�
 
 ---
 
-## بخش ۵ — وضعیت زنده (تا `7d7962f47f6`)
+## بخش ۵ — وضعیت زنده (تا `4c93df303b2`)
 
 **بسته‌شده در موج ۱ و ۲:** Q2 (بهداشت)، Q12 (usage روی desktop)، Q13 (گیت
 ثبت contribution)، A5 قدم ۱ (گارد plan mode)، A7 بندهای الف/ب/ج/د (approval،
 tool picker، ledger، gauge).
 
-**گیت‌های سبز:** تایپ‌چک کامل `exit 0`؛ `verify.mjs` — ۱۰۰ تست، گیت contribution
-۲۵۹ فایل / ۲۵۳ قابل‌رسیدن / ۶ یتیم مستند / صفر غیرمنتظره.
+**بسته‌شده در موج ۳ (۰۹-۰۸، این شاخه):** A3 (`4d535aee20a` — checkpoint در
+مرز واحد toolsService + سرویس firmware رندر-سafe + بازنشستگی agentRollback)،
+C2 (`c0f0588c705` — gauge هدر سایدبار)، E1 (`d7ed1ca5448` — rule ها روی هر سه
+مسیر؛ precedence منتظر تأیید owner)، M2 (`4c93df303b2` — recall هیبرید روی
+مسیر تزریق + backfill + provider معتبر). همه 🟡 تا تست owner؛ هیچ‌کدام live-patch
+پورت نشده‌اند. گیت‌های سبز: تایپ‌چک کامل، verify (۱۴۱ تست، contribution-gate)،
+eslint صفر روی همه‌ی فایل‌های دست‌خورده. نکته: فایل تست حافظه به
+`test/browser/` منتقل شد (قانون layering — import از browser در test/node ممنوع).
+
+**گیت‌های سبز:** تایپ‌چک کامل `exit 0`؛ `verify.mjs` — ۱۴۱ تست، گیت contribution
+۲۵۹ فایل / ۲۵۳ قابل‌رسیدن / ۶ یتیم مستند / صفر غیرمنتظره. ⚠️ `verify.mjs`
+live-patch در آخرین اجرا روی ماشین dev به‌خاطر ویرایش هم‌زمان‌ی owner روی
+`tools/live-patch.py` FAIL می‌شود («corruption needle») — از موج ۳ نیست.
 
 **باز و مال مالک:** Q9 (TLS)؛ تصمیم `voiceEventStream.contribution.ts`؛ تصمیم
 N5 (باندل‌های React)؛ تأیید تغییر هدر `tools/**` در `eslint.config.js`؛ و
-ratify یا reset چهار کامیت `--no-verify` موج ۱.
+ratify یا reset چهار کامیت `--no-verify` موج ۱ (کامیت‌های موج ۳ همه با هوک
+سبز زده شدند). **تازه از موج ۳:** تأیید precedence تسک E1؛ بازبینی هدر
+provenance فایل `powerModeContextBuilder.ts`؛ پورت live-patch چهار تسک موج ۳.
