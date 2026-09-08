@@ -13,7 +13,7 @@ import { registerSingleton, InstantiationType } from '../../../../platform/insta
 import { createDecorator, IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { QueryBuilder } from '../../../services/search/common/queryBuilder.js';
-import { ISearchService, IFileQuery, ITextQuery, QueryType } from '../../../services/search/common/search.js';
+import { ISearchService, IFileQuery, ITextQuery, QueryType, isFileMatch, resultIsMatch } from '../../../services/search/common/search.js';
 import { IEditCodeService } from './editCodeServiceInterface.js';
 import { ITerminalToolService } from './terminalToolService.js';
 import { LintErrorItem, BuiltinToolCallParams, BuiltinToolResultType, BuiltinToolName, TerminalResolveReason } from '../common/toolsServiceTypes.js';
@@ -37,6 +37,7 @@ import { IEnvironmentService } from '../../../../platform/environment/common/env
 import { IExternalCommandExecutor } from './externalCommandExecutor.js';
 import { IPowerModeService } from '../../powerMode/browser/powerModeService.js';
 import { IWorkflowAgentService } from '../../neuralInverse/browser/workflowAgentService.js';
+import { ICheckpointService } from '../../neuralInverseFirmware/browser/engine/projectConfig/checkpointService.js';
 import type { INeuralInverseSubAgentService } from './neuralInverseSubAgentService.js';
 import { IUserInputRequestService } from './userInputRequestService.js';
 import {
@@ -45,6 +46,20 @@ import {
 	createTaskUpdateTool,
 	createTaskGetTool,
 } from '../../powerMode/browser/tools/advancedTools.js';
+import { IToolContext } from '../../powerMode/common/powerModeTypes.js';
+import { SubAgentRole } from '../common/subAgentTypes.js';
+
+const messageOfThrown = (e: unknown): string => e instanceof Error ? e.message : String(e);
+
+// The tasks_* tools never read their context argument; this satisfies
+// IToolContext without inventing per-call state.
+const voidToolContext: IToolContext = {
+	sessionId: '',
+	messageId: '',
+	agentId: '',
+	abort: new AbortController().signal,
+	metadata: () => { },
+};
 
 
 // tool use for AI
@@ -116,14 +131,52 @@ export const withPlanModeGuard = <T extends Record<string, PlanModeGuardedToolFn
 	return guarded as T;
 };
 
+// File-checkpoint boundary (task A3): the workspace file each mutating builtin
+// tool is about to touch, or null when the call doesn't target a file. Folders
+// have no content to snapshot; terminal tools are excluded because their file
+// effects are indirect (that coupling belongs with the unified-permissions
+// work on run_command, task A4).
+const checkpointableToolFiles: { [T in BuiltinToolName]?: (p: BuiltinToolCallParams[T]) => string | null } = {
+	'rewrite_file': p => p.uri.fsPath,
+	'edit_file': p => p.uri.fsPath,
+	'multi_replace_file_content': p => p.uri.fsPath,
+	'create_file_or_folder': p => p.isFolder ? null : p.uri.fsPath,
+	'delete_file_or_folder': p => p.isFolder ? null : p.uri.fsPath,
+	// Power Mode style tools address files by string path
+	'write': p => p.filePath,
+	'edit': p => p.filePath,
+};
+
+/**
+ * Wraps every entry of a callTool map so the file-writing tools above get a
+ * content checkpoint (via the hook) right before they execute. Both the chat
+ * sidebar and the native chat bridge invoke builtin tools through this map,
+ * which makes it — like withPlanModeGuard — a single boundary covering every
+ * caller at once.
+ */
+export const withCheckpointing = <T extends Record<string, PlanModeGuardedToolFn>>(
+	tools: T,
+	beforeRun: (toolName: string, params: unknown) => Promise<void>,
+): T => {
+	const wrapped: Record<string, PlanModeGuardedToolFn> = {};
+	for (const toolName of Object.keys(tools)) {
+		const impl = tools[toolName];
+		wrapped[toolName] = async (params: never) => {
+			await beforeRun(toolName, params);
+			return impl(params);
+		};
+	}
+	return wrapped as T;
+};
+
 
 const isFalsy = (u: unknown) => {
 	return !u || u === 'null' || u === 'undefined';
 };
 
 const validateStr = (argName: string, value: unknown) => {
-	if (value === null) {throw new Error(`Invalid LLM output: ${argName} was null.`);}
-	if (typeof value !== 'string') {throw new Error(`Invalid LLM output format: ${argName} must be a string, but its type is "${typeof value}". Full value: ${JSON.stringify(value)}.`);}
+	if (value === null) { throw new Error(`Invalid LLM output: ${argName} was null.`); }
+	if (typeof value !== 'string') { throw new Error(`Invalid LLM output format: ${argName} must be a string, but its type is "${typeof value}". Full value: ${JSON.stringify(value)}.`); }
 	return value;
 };
 
@@ -138,7 +191,7 @@ const normalizeToolPath = (filePath: string, workspaceDir: string): string => {
 	// file — joining it matches the old behavior and avoids file:///app/… ENOENTs on Windows.
 	const isAbsolute = /^\/?[a-zA-Z]:\//.test(p) || p.startsWith('//')
 		|| (p.startsWith('/') && root.startsWith('/') && p.toLowerCase().startsWith(root.toLowerCase() + '/'));
-	if (isAbsolute) {return p;}
+	if (isAbsolute) { return p; }
 	return `${root}/${p.replace(/^\//, '')}`;
 };
 
@@ -147,8 +200,8 @@ const normalizeToolPath = (filePath: string, workspaceDir: string): string => {
 // workspaceRootUri: when set, plain paths are resolved using the workspace root's scheme
 // (e.g. vscode-remote:// in Coder) instead of always using file://.
 const makeValidateURI = (workspaceRootUri: URI | undefined) => (uriStr: unknown): URI => {
-	if (uriStr === null) {throw new Error(`Invalid LLM output: uri was null.`);}
-	if (typeof uriStr !== 'string') {throw new Error(`Invalid LLM output format: Provided uri must be a string, but it's a(n) ${typeof uriStr}. Full value: ${JSON.stringify(uriStr)}.`);}
+	if (uriStr === null) { throw new Error(`Invalid LLM output: uri was null.`); }
+	if (typeof uriStr !== 'string') { throw new Error(`Invalid LLM output format: Provided uri must be a string, but it's a(n) ${typeof uriStr}. Full value: ${JSON.stringify(uriStr)}.`); }
 
 	// Already has a scheme — parse as-is
 	if (uriStr.includes('://')) {
@@ -167,38 +220,37 @@ const makeValidateURI = (workspaceRootUri: URI | undefined) => (uriStr: unknown)
 const validateURI = makeValidateURI(undefined);
 
 const makeValidateOptionalURI = (workspaceRootUri: URI | undefined) => (uriStr: unknown): URI | null => {
-	if (isFalsy(uriStr)) {return null;}
+	if (isFalsy(uriStr)) { return null; }
 	return makeValidateURI(workspaceRootUri)(uriStr);
 };
 
 const _validateOptionalURI = (uriStr: unknown) => {
-	if (isFalsy(uriStr)) {return null;}
+	if (isFalsy(uriStr)) { return null; }
 	return validateURI(uriStr);
 };
 void _validateOptionalURI;
 
 const validateOptionalStr = (argName: string, str: unknown) => {
-	if (isFalsy(str)) {return null;}
+	if (isFalsy(str)) { return null; }
 	return validateStr(argName, str);
 };
 
 
 const validatePageNum = (pageNumberUnknown: unknown) => {
-	if (!pageNumberUnknown) {return 1;}
+	if (!pageNumberUnknown) { return 1; }
 	const parsedInt = Number.parseInt(pageNumberUnknown + '');
-	if (!Number.isInteger(parsedInt)) {throw new Error(`Page number was not an integer: "${pageNumberUnknown}".`);}
-	if (parsedInt < 1) {throw new Error(`Invalid LLM output format: Specified page number must be 1 or greater: "${pageNumberUnknown}".`);}
+	if (!Number.isInteger(parsedInt)) { throw new Error(`Page number was not an integer: "${pageNumberUnknown}".`); }
+	if (parsedInt < 1) { throw new Error(`Invalid LLM output format: Specified page number must be 1 or greater: "${pageNumberUnknown}".`); }
 	return parsedInt;
 };
 
 const validateNumber = (numStr: unknown, opts: { default: number | null }) => {
-	if (typeof numStr === 'number')
-		{return numStr;}
-	if (isFalsy(numStr)) {return opts.default;}
+	if (typeof numStr === 'number') { return numStr; }
+	if (isFalsy(numStr)) { return opts.default; }
 
 	if (typeof numStr === 'string') {
 		const parsedInt = Number.parseInt(numStr + '');
-		if (!Number.isInteger(parsedInt)) {return opts.default;}
+		if (!Number.isInteger(parsedInt)) { return opts.default; }
 		return parsedInt;
 	}
 
@@ -206,15 +258,15 @@ const validateNumber = (numStr: unknown, opts: { default: number | null }) => {
 };
 
 const validateProposedTerminalId = (terminalIdUnknown: unknown) => {
-	if (!terminalIdUnknown) {throw new Error(`A value for terminalID must be specified, but the value was "${terminalIdUnknown}"`);}
+	if (!terminalIdUnknown) { throw new Error(`A value for terminalID must be specified, but the value was "${terminalIdUnknown}"`); }
 	const terminalId = terminalIdUnknown + '';
 	return terminalId;
 };
 
 const validateBoolean = (b: unknown, opts: { default: boolean }) => {
 	if (typeof b === 'string') {
-		if (b === 'true') {return true;}
-		if (b === 'false') {return false;}
+		if (b === 'true') { return true; }
+		if (b === 'false') { return false; }
 	}
 	if (typeof b === 'boolean') {
 		return b;
@@ -225,7 +277,7 @@ const validateBoolean = (b: unknown, opts: { default: boolean }) => {
 
 const checkIfIsFolder = (uriStr: string) => {
 	uriStr = uriStr.trim();
-	if (uriStr.endsWith('/') || uriStr.endsWith('\\')) {return true;}
+	if (uriStr.endsWith('/') || uriStr.endsWith('\\')) { return true; }
 	return false;
 };
 
@@ -273,6 +325,21 @@ export class ToolsService extends Disposable implements IToolsService {
 	getThreadTodos(threadId: string): TodoItem[] { return this._todosByThread.get(threadId) ?? []; }
 	getThreadWorktree(threadId: string) { return this._worktreeByThread.get(threadId); }
 
+	// Task A3: snapshot the file a mutating tool is about to touch, so any agent
+	// turn can be undone from the checkpoint list. Best-effort by design — a
+	// snapshot failure must never block the edit itself.
+	private async _createCheckpointForTool(toolName: string, params: unknown): Promise<void> {
+		try {
+			const fileOf = checkpointableToolFiles[toolName as BuiltinToolName];
+			if (!fileOf) { return; }
+			const filePath = fileOf(params as never);
+			if (!filePath) { return; }
+			await this._checkpointService.createCheckpoint(`void:${toolName}`, [filePath]);
+		} catch (e) {
+			console.warn(`[ToolsService] checkpoint before "${toolName}" failed (tool still ran): ${(e as Error).message}`);
+		}
+	}
+
 	async runHook(hookName: string, env: Record<string, string>): Promise<{ output: string; blocked: boolean }> {
 		try {
 			const hookPath = `${this._workspaceDir}/.neuralinverse/hooks/${hookName}.sh`;
@@ -305,6 +372,7 @@ export class ToolsService extends Disposable implements IToolsService {
 		@IExternalCommandExecutor private readonly commandExecutor: IExternalCommandExecutor,
 		@IPowerModeService private readonly powerMode: IPowerModeService,
 		@IUserInputRequestService private readonly userInputRequestService: IUserInputRequestService,
+		@ICheckpointService private readonly _checkpointService: ICheckpointService,
 	) {
 		super();
 		const queryBuilder = instantiationService.createInstance(QueryBuilder);
@@ -325,7 +393,7 @@ export class ToolsService extends Disposable implements IToolsService {
 					? URI.joinPath(workspaceRootUri, '.neuralinverse/commands')
 					: URI.file(`${workspaceDir}/.neuralinverse/commands`);
 				const entries = await fileService.resolve(dir);
-				if (!entries.children) {return [];}
+				if (!entries.children) { return []; }
 				const results: { name: string; content: string }[] = [];
 				for (const entry of entries.children) {
 					if (entry.isFile && entry.name.endsWith('.md')) {
@@ -534,8 +602,8 @@ export class ToolsService extends Disposable implements IToolsService {
 				let startLine = validateNumber(startLineUnknown, { default: null });
 				let endLine = validateNumber(endLineUnknown, { default: null });
 
-				if (startLine !== null && startLine < 1) {startLine = null;}
-				if (endLine !== null && endLine < 1) {endLine = null;}
+				if (startLine !== null && startLine < 1) { startLine = null; }
+				if (endLine !== null && endLine < 1) { endLine = null; }
 
 				return { uri, startLine, endLine, pageNumber };
 			},
@@ -738,8 +806,9 @@ export class ToolsService extends Disposable implements IToolsService {
 				const result = resultPromise.then(output => {
 					const truncated = output.length > MAX_PM_OUTPUT ? output.substring(0, MAX_PM_OUTPUT) + '\n[Output truncated at 50KB]' : output;
 					return { result: truncated };
-				}).catch((err: any) => {
-					return { result: `Error: ${err.message}${err.stderr ? '\n' + err.stderr : ''}` };
+				}).catch((err: unknown) => {
+					const stderr = (err as { stderr?: string } | null | undefined)?.stderr;
+					return { result: `Error: ${messageOfThrown(err)}${stderr ? '\n' + stderr : ''}` };
 				});
 				return { result, interruptTool };
 			},
@@ -765,8 +834,8 @@ export class ToolsService extends Disposable implements IToolsService {
 					}).join('\n');
 					const out = numbered.length > MAX_PM_OUTPUT ? numbered.substring(0, MAX_PM_OUTPUT) + '\n[Output truncated]' : numbered;
 					return { result: { result: out } };
-				} catch (err: any) {
-					return { result: { result: `Error: ${err.message}` } };
+				} catch (err) {
+					return { result: { result: `Error: ${messageOfThrown(err)}` } };
 				}
 			},
 			write: async ({ filePath, content }) => {
@@ -784,8 +853,8 @@ export class ToolsService extends Disposable implements IToolsService {
 					try { await fileService.createFolder(parentUri); } catch { /* already exists */ }
 					await fileService.writeFile(uri, VSBuffer.fromString(content));
 					return { result: { result: `Successfully wrote ${content.split('\n').length} lines to ${normalizedPath}` } };
-				} catch (err: any) {
-					return { result: { result: `Error writing file: ${err.message}` } };
+				} catch (err) {
+					return { result: { result: `Error writing file: ${messageOfThrown(err)}` } };
 				}
 			},
 			edit: async ({ filePath, oldString, newString }) => {
@@ -804,8 +873,8 @@ export class ToolsService extends Disposable implements IToolsService {
 					const newText = text.replace(oldString, newString);
 					await fileService.writeFile(uri, VSBuffer.fromString(newText));
 					return { result: { result: `Successfully edited ${normalizedPath}` } };
-				} catch (err: any) {
-					return { result: { result: `Error: ${err.message}` } };
+				} catch (err) {
+					return { result: { result: `Error: ${messageOfThrown(err)}` } };
 				}
 			},
 			glob: async ({ pattern, path: searchPath }) => {
@@ -820,8 +889,8 @@ export class ToolsService extends Disposable implements IToolsService {
 					const results = await searchService.fileSearch(query);
 					const files = results.results.map(r => r.resource.fsPath).join('\n');
 					return { result: { result: files || 'No matches found.' } };
-				} catch (err: any) {
-					return { result: { result: `Error: ${err.message}` } };
+				} catch (err) {
+					return { result: { result: `Error: ${messageOfThrown(err)}` } };
 				}
 			},
 			grep: async ({ pattern, path: searchPath, include }) => {
@@ -843,14 +912,14 @@ export class ToolsService extends Disposable implements IToolsService {
 					};
 					const matches: string[] = [];
 					await searchService.textSearch(query, undefined, (item) => {
-						if ('resource' in item) {
-							const fm = item as { resource: { fsPath: string }; results?: Array<{ rangeLocations?: Array<{ source: { startLineNumber: number } }>; previewText?: string }> };
-							const file = fm.resource.fsPath;
-							for (const res of fm.results ?? []) {
+						if (isFileMatch(item)) {
+							const file = item.resource.fsPath;
+							for (const res of item.results ?? []) {
+								if (!resultIsMatch(res)) { continue; }
 								const soFar = matchesPerFile.get(file) ?? 0;
-								if (soFar >= MAX_MATCHES_PER_FILE) {continue;}
+								if (soFar >= MAX_MATCHES_PER_FILE) { continue; }
 								matchesPerFile.set(file, soFar + 1);
-								const line = res.rangeLocations?.[0]?.source.startLineNumber ?? 0;
+								const line = res.rangeLocations[0]?.source.startLineNumber ?? 0;
 								matches.push(`${file}:${line}: ${(res.previewText ?? '').trim()}`);
 							}
 						}
@@ -860,8 +929,8 @@ export class ToolsService extends Disposable implements IToolsService {
 						return { result: { result: output + `\n[Result limit reached (${MAX_GREP_RESULTS} matches, max ${MAX_MATCHES_PER_FILE}/file). Narrow the pattern or search per subdirectory.]` } };
 					}
 					return { result: { result: output.length > MAX_PM_OUTPUT ? output.substring(0, MAX_PM_OUTPUT) + '\n[Output truncated]' : output } };
-				} catch (err: any) {
-					return { result: { result: `Error: ${err.message}` } };
+				} catch (err) {
+					return { result: { result: `Error: ${messageOfThrown(err)}` } };
 				}
 			},
 			list: async ({ dirPath }) => {
@@ -870,8 +939,8 @@ export class ToolsService extends Disposable implements IToolsService {
 					const resolved = await fileService.resolve(uri);
 					const entries = (resolved.children ?? []).map(c => `${c.isDirectory ? 'd' : '-'} ${c.name}`).sort().join('\n');
 					return { result: { result: entries || '(empty directory)' } };
-				} catch (err: any) {
-					return { result: { result: `Error: ${err.message}` } };
+				} catch (err) {
+					return { result: { result: `Error: ${messageOfThrown(err)}` } };
 				}
 			},
 			// (GRC compliance tool implementations removed - Enterprise Edition only)
@@ -879,8 +948,8 @@ export class ToolsService extends Disposable implements IToolsService {
 				try {
 					const answer = await this.powerMode.answerQuery(question);
 					return { result: { result: answer } };
-				} catch (e: any) {
-					return { result: { result: `[Power Mode connection error: ${e.message ?? 'unknown'}]` } };
+				} catch (e) {
+					return { result: { result: `[Power Mode connection error: ${messageOfThrown(e)}]` } };
 				}
 			},
 			query_ni_agent: async ({ agentId, input }) => {
@@ -901,8 +970,8 @@ export class ToolsService extends Disposable implements IToolsService {
 						return { result: { result: `[Agent "${agentId}" failed] ${run.error ?? output}` } };
 					}
 					return { result: { result: output } };
-				} catch (e: any) {
-					return { result: { result: `[query_ni_agent error: ${e.message ?? 'unknown'}]` } };
+				} catch (e) {
+					return { result: { result: `[query_ni_agent error: ${messageOfThrown(e)}]` } };
 				}
 			},
 			// --- Workflow tools ---
@@ -915,10 +984,10 @@ export class ToolsService extends Disposable implements IToolsService {
 						reject(new Error('ask_user cancelled'));
 					});
 					const pending = [...this.userInputRequestService.pendingRequests.values()];
-					if (pending.length > 0) {requestId = pending[pending.length - 1].id;}
+					if (pending.length > 0) { requestId = pending[pending.length - 1].id; }
 				});
 				const interruptTool = () => {
-					if (requestId) {this.userInputRequestService.cancel(requestId);}
+					if (requestId) { this.userInputRequestService.cancel(requestId); }
 				};
 				return { result: resultPromise, interruptTool };
 			},
@@ -957,8 +1026,8 @@ export class ToolsService extends Disposable implements IToolsService {
 					}
 
 					return { result: { result: content } };
-				} catch (err: any) {
-					return { result: { result: `Error fetching URL: ${err.message}` } };
+				} catch (err) {
+					return { result: { result: `Error fetching URL: ${messageOfThrown(err)}` } };
 				}
 			},
 			memory_write: async ({ key, content }) => {
@@ -976,8 +1045,8 @@ export class ToolsService extends Disposable implements IToolsService {
 					await fileService.writeFile(fileUri, buffer);
 
 					return { result: { result: `Memory saved: ${key}` } };
-				} catch (err: any) {
-					return { result: { result: `Error saving memory: ${err.message}` } };
+				} catch (err) {
+					return { result: { result: `Error saving memory: ${messageOfThrown(err)}` } };
 				}
 			},
 			memory_read: async ({ key }) => {
@@ -988,33 +1057,33 @@ export class ToolsService extends Disposable implements IToolsService {
 					const content = await fileService.readFile(fileUri);
 					const text = content.value.toString();
 					return { result: { result: text } };
-				} catch (err: any) {
+				} catch (err) {
 					return { result: { result: `No memory found for key: ${key}` } };
 				}
 			},
 			tasks_create: async ({ title, description }) => {
 				// Use the shared task store from advancedTools
 				const tool = createTaskCreateTool();
-				const result = await tool.execute({ title, description: description || undefined }, {} as any);
+				const result = await tool.execute({ title, description: description || undefined }, voidToolContext);
 				return { result: { result: result.output } };
 			},
 			tasks_list: async (_params) => {
 				const tool = createTaskListTool();
-				const result = await tool.execute({}, {} as any);
+				const result = await tool.execute({}, voidToolContext);
 				return { result: { result: result.output } };
 			},
 			tasks_update: async ({ taskId, status, title, description }) => {
 				const tool = createTaskUpdateTool();
-				const args: Record<string, any> = { taskId };
-				if (status) {args.status = status;}
-				if (title) {args.title = title;}
-				if (description) {args.description = description;}
-				const result = await tool.execute(args, {} as any);
+				const args: Record<string, unknown> = { taskId };
+				if (status) { args.status = status; }
+				if (title) { args.title = title; }
+				if (description) { args.description = description; }
+				const result = await tool.execute(args, voidToolContext);
 				return { result: { result: result.output } };
 			},
 			tasks_get: async ({ taskId }) => {
 				const tool = createTaskGetTool();
-				const result = await tool.execute({ taskId }, {} as any);
+				const result = await tool.execute({ taskId }, voidToolContext);
 				return { result: { result: result.output } };
 			},
 			spawn_agent: async ({ role, goal, scopedFiles }) => {
@@ -1031,7 +1100,7 @@ export class ToolsService extends Disposable implements IToolsService {
 				// Let sub-agent service determine parent context from active agent task
 				// This will show the agent activity inline in the UI with tool calls
 				const agent = subAgentService.spawn({
-					role: role as any, // SubAgentRole
+					role: role as SubAgentRole,
 					goal,
 					scopedFiles: scopedFilesArray,
 					// Don't pass parentContext - let it use the active agent task
@@ -1258,10 +1327,10 @@ export class ToolsService extends Disposable implements IToolsService {
 				const parts: string[] = [];
 				parts.push(`Imports (${result.imports.length}):`);
 				for (const imp of result.imports.slice(0, 50)) { parts.push(`  -> ${shorten(imp)}`); }
-				if (result.imports.length > 50) {parts.push(`  ... and ${result.imports.length - 50} more`);}
+				if (result.imports.length > 50) { parts.push(`  ... and ${result.imports.length - 50} more`); }
 				parts.push(`\nImported by (${result.importers.length}):`);
 				for (const imp of result.importers.slice(0, 50)) { parts.push(`  <- ${shorten(imp)}`); }
-				if (result.importers.length > 50) {parts.push(`  ... and ${result.importers.length - 50} more`);}
+				if (result.importers.length > 50) { parts.push(`  ... and ${result.importers.length - 50} more`); }
 				return { result: { result: parts.join('\n') } };
 			},
 			context_recent_edits: async ({ withinMinutes }) => {
@@ -1315,8 +1384,8 @@ export class ToolsService extends Disposable implements IToolsService {
 					let raw: string;
 					try {
 						raw = (await fileService.readFile(uri)).value.toString();
-					} catch (e: any) {
-						throw new Error(`No contents; File does not exist. (${e?.message ?? e})`);
+					} catch (e) {
+						throw new Error(`No contents; File does not exist. (${messageOfThrown(e)})`);
 					}
 					const lines = raw.split('\n');
 					const startLineNumber = startLine === null ? 1 : startLine;
@@ -1421,8 +1490,7 @@ export class ToolsService extends Disposable implements IToolsService {
 			// ---
 
 			create_file_or_folder: async ({ uri, isFolder }) => {
-				if (isFolder)
-					{await fileService.createFolder(uri);}
+				if (isFolder) { await fileService.createFolder(uri); }
 				else {
 					await fileService.createFile(uri);
 				}
@@ -1513,94 +1581,94 @@ export class ToolsService extends Disposable implements IToolsService {
 				const { resPromise, interrupt } = await this.terminalToolService.runCommand(command, { type: 'temporary', cwd, terminalId, inactivityTimeoutSec: timeout ?? undefined });
 
 				// Build a shared result promise that can be resolved early by bg_after timer OR user "Move to BG" click
-				const result = new Promise<{ result: string; resolveReason: TerminalResolveReason }>(async (resolve, reject) => {
-					// User-triggered "Move to BG" button
-					const threadIdAtPromotion = this._currentThreadId;
-					const fireWhenDone = (bgTerminalId: string) => {
-						resPromise.then(r => {
-							this._onBackgroundTerminalComplete.fire({
-								threadId: threadIdAtPromotion,
-								command,
-								output: r.result,
-								exitCode: (r.resolveReason as any).exitCode ?? 0,
+				const result = new Promise<{ result: string; resolveReason: TerminalResolveReason }>((resolve, reject) => {					// The executor must stay synchronous (no-async-promise-executor); the					// async body keeps the old semantics - an uncaught throw neither					// resolves nor rejects the outer promise.					void (async () => {
+						// User-triggered "Move to BG" button
+						const threadIdAtPromotion = this._currentThreadId;
+						const fireWhenDone = (bgTerminalId: string) => {
+							resPromise.then(r => {
+								this._onBackgroundTerminalComplete.fire({
+									threadId: threadIdAtPromotion,
+									command,
+									output: r.result,
+									exitCode: r.resolveReason.type === 'done' ? r.resolveReason.exitCode : 0,
+								});
+							}).catch(() => {
+								this._onBackgroundTerminalComplete.fire({
+									threadId: threadIdAtPromotion,
+									command,
+									output: `Terminal ${bgTerminalId} was closed before completing.`,
+									exitCode: 1,
+								});
 							});
-						}).catch(() => {
-							this._onBackgroundTerminalComplete.fire({
-								threadId: threadIdAtPromotion,
-								command,
-								output: `Terminal ${bgTerminalId} was closed before completing.`,
-								exitCode: 1,
-							});
-						});
-					};
+						};
 
-					const promoteListener = this.terminalToolService.onPromoteToBackground(async ({ terminalId: firedId }) => {
-						if (firedId !== terminalId) {return;}
-						promoteListener.dispose();
+						const promoteListener = this.terminalToolService.onPromoteToBackground(async ({ terminalId: firedId }) => {
+							if (firedId !== terminalId) { return; }
+							promoteListener.dispose();
+							try {
+								const bgTerminalId = await this.terminalToolService.createPersistentTerminal({ cwd });
+								fireWhenDone(bgTerminalId);
+								resolve({
+									resolveReason: { type: 'done' as const, exitCode: 0 },
+									result: `Command moved to background. The result will be reported back to you automatically when it finishes.`,
+								});
+							} catch {
+								resolve({
+									resolveReason: { type: 'done' as const, exitCode: 0 },
+									result: `Command moved to background. The result will be reported back to you automatically when it finishes.`,
+								});
+							}
+						});
+
+						if (!bgAfter) {
+							try {
+								const r = await resPromise;
+								resolve(r);
+							} catch (err) {
+								// A throw inside an async Promise executor does NOT reject the
+								// outer promise — without this, a failed command left the tool
+								// call pending forever and hung the whole agent loop.
+								reject(err);
+							} finally {
+								promoteListener.dispose();
+							}
+							return;
+						}
+
+						// bg_after: watch for N seconds, then promote to background if still running
+						const bgAfterMs = bgAfter * 1000;
+						try {
+							const winner = await Promise.race([
+								resPromise.then(r => ({ kind: 'done' as const, r })),
+								new Promise<{ kind: 'timeout' }>(res => setTimeout(() => res({ kind: 'timeout' }), bgAfterMs)),
+							]);
+							promoteListener.dispose();
+
+							if (winner.kind === 'done') {
+								resolve(winner.r);
+								return;
+							}
+						} catch (err) {
+							promoteListener.dispose();
+							reject(err);
+							return;
+						}
+
+						// Still running after bgAfter seconds — promote to background persistent terminal
 						try {
 							const bgTerminalId = await this.terminalToolService.createPersistentTerminal({ cwd });
 							fireWhenDone(bgTerminalId);
 							resolve({
 								resolveReason: { type: 'done' as const, exitCode: 0 },
-								result: `Command moved to background. The result will be reported back to you automatically when it finishes.`,
+								result: `Command still running after ${bgAfter}s, moved to background. The result will be reported back to you automatically when it finishes.`,
 							});
 						} catch {
 							resolve({
 								resolveReason: { type: 'done' as const, exitCode: 0 },
-								result: `Command moved to background. The result will be reported back to you automatically when it finishes.`,
+								result: `Command still running after ${bgAfter}s, moved to background. The result will be reported back to you automatically when it finishes.`,
 							});
 						}
-					});
-
-					if (!bgAfter) {
-						try {
-							const r = await resPromise;
-							resolve(r);
-						} catch (err) {
-							// A throw inside an async Promise executor does NOT reject the
-							// outer promise — without this, a failed command left the tool
-							// call pending forever and hung the whole agent loop.
-							reject(err);
-						} finally {
-							promoteListener.dispose();
-						}
-						return;
-					}
-
-					// bg_after: watch for N seconds, then promote to background if still running
-					const bgAfterMs = bgAfter * 1000;
-					try {
-						const winner = await Promise.race([
-							resPromise.then(r => ({ kind: 'done' as const, r })),
-							new Promise<{ kind: 'timeout' }>(res => setTimeout(() => res({ kind: 'timeout' }), bgAfterMs)),
-						]);
-						promoteListener.dispose();
-
-						if (winner.kind === 'done') {
-							resolve(winner.r);
-							return;
-						}
-					} catch (err) {
-						promoteListener.dispose();
-						reject(err);
-						return;
-					}
-
-					// Still running after bgAfter seconds — promote to background persistent terminal
-					try {
-						const bgTerminalId = await this.terminalToolService.createPersistentTerminal({ cwd });
-						fireWhenDone(bgTerminalId);
-						resolve({
-							resolveReason: { type: 'done' as const, exitCode: 0 },
-							result: `Command still running after ${bgAfter}s, moved to background. The result will be reported back to you automatically when it finishes.`,
-						});
-					} catch {
-						resolve({
-							resolveReason: { type: 'done' as const, exitCode: 0 },
-							result: `Command still running after ${bgAfter}s, moved to background. The result will be reported back to you automatically when it finishes.`,
-						});
-					}
-				});
+					})();				});
 
 				return { result, interruptTool: interrupt };
 			},
@@ -1638,7 +1706,7 @@ export class ToolsService extends Disposable implements IToolsService {
 						threadId,
 						command,
 						output: r.result,
-						exitCode: (r.resolveReason as any).exitCode ?? 0,
+						exitCode: r.resolveReason.type === 'done' ? r.resolveReason.exitCode : 0,
 					});
 				}).catch(() => {
 					this._onBackgroundTerminalComplete.fire({ threadId, command, output: 'Terminal was closed before completing.', exitCode: 1 });
@@ -1671,7 +1739,7 @@ export class ToolsService extends Disposable implements IToolsService {
 			update_agent_status: async ({ taskName, taskSummary, taskStatus }) => {
 				// update_task simply serves as a marker in the tool history
 				// to be rendered by the UI component loop.
-				return { result: { result: "Task updated." } };
+				return { result: { result: 'Task updated.' } };
 			},
 
 			generate_document: async ({ title, content }) => {
@@ -1737,14 +1805,19 @@ export class ToolsService extends Disposable implements IToolsService {
 			},
 		};
 
-		// Plan-mode containment (task A5, step 1): the guard is the single
-		// boundary every builtin tool call passes through (the chat sidebar's
-		// `_runToolCall` and the native chat bridge both invoke
-		// `toolsService.callTool[toolName](...)`). It reads the same per-thread
-		// flag that `plan_mode_enter`/`plan_mode_exit` maintain via
-		// `_currentThreadId`, so blocked tools reject with an explanation for
-		// the model until the thread leaves plan mode.
-		this.callTool = withPlanModeGuard(builtinCallTool, () => this._planModeByThread.get(this._currentThreadId) ?? false);
+		// Plan-mode containment (task A5, step 1) and file checkpoints (task A3)
+		// share this single boundary: the chat sidebar's `_runToolCall` and the
+		// native chat bridge both invoke `toolsService.callTool[toolName](...)`.
+		// The plan guard is outermost so a blocked call takes no checkpoint; the
+		// checkpoint wrapper snapshots the target file's current content right
+		// before the tool executes, on every path that runs it.
+		this.callTool = withPlanModeGuard(
+			withCheckpointing(
+				builtinCallTool,
+				(toolName, params) => this._createCheckpointForTool(toolName, params),
+			),
+			() => this._planModeByThread.get(this._currentThreadId) ?? false,
+		);
 
 
 		const nextPageStr = (hasNextPage: boolean) => hasNextPage ? '\n\n(more on next page...)' : '';
@@ -1816,7 +1889,7 @@ export class ToolsService extends Disposable implements IToolsService {
 			},
 			search_in_file: (params, result) => {
 				const { model } = voidModelService.getModel(params.uri);
-				if (!model) {return '<Error getting string of result>';}
+				if (!model) { return '<Error getting string of result>'; }
 				const lines = result.lines.map(n => {
 					const lineContent = model.getValueInRange({ startLineNumber: n, startColumn: 1, endLineNumber: n, endColumn: Number.MAX_SAFE_INTEGER }, EndOfLinePreference.LF);
 					return `Line ${n}:\n\`\`\`\n${lineContent}\n\`\`\``;
@@ -1976,7 +2049,7 @@ export class ToolsService extends Disposable implements IToolsService {
 				endLineNumber: l.endLineNumber,
 			} satisfies LintErrorItem));
 
-		if (!lintErrors.length) {return { lintErrors: null };}
+		if (!lintErrors.length) { return { lintErrors: null }; }
 		return { lintErrors, };
 	}
 

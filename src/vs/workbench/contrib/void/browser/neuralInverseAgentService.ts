@@ -1,14 +1,6 @@
 /*--------------------------------------------------------------------------------------
- *  Copyright (c) NeuralInverse. All rights reserved.
- *  Neural Inverse Agent Service — Autonomous agentic execution engine.
- *
- *  This service wraps the existing ChatThreadService tool-use loop with
- *  an autonomous agent layer that:
- *    1. Plans multi-step tasks
- *    2. Auto-approves safe tools based on risk tiers
- *    3. Tracks execution context (working memory)
- *    4. Self-corrects on errors
- *    5. Emits structured events for the UI
+ *  Copyright (c) Neural Inverse Inc. All rights reserved.
+ *  Neural Inverse Agent Service — autonomous agentic execution over the chat tool loop.
  *--------------------------------------------------------------------------------------*/
 
 import { Disposable } from '../../../../base/common/lifecycle.js';
@@ -40,7 +32,6 @@ import {
 	AGENT_ITERATION_BUDGET,
 } from '../common/neuralInverseAgentTypes.js';
 import { IAgentScratchpadService } from './agentScratchpadService.js';
-import { IAgentRollbackService } from './agentRollbackService.js';
 import { IAgentTaskDecomposer } from './agentTaskDecomposer.js';
 import { IAgentMemoryService } from './agentMemoryService.js';
 import type { INeuralInverseSubAgentService } from './neuralInverseSubAgentService.js';
@@ -113,7 +104,6 @@ class NeuralInverseAgentService extends Disposable implements INeuralInverseAgen
 		@INotificationService private readonly _notificationService: INotificationService,
 		@INeuralInverseAgentConfigService private readonly _configService: INeuralInverseAgentConfigService,
 		@IAgentScratchpadService private readonly _scratchpadService: IAgentScratchpadService,
-		@IAgentRollbackService private readonly _rollbackService: IAgentRollbackService,
 		@IAgentTaskDecomposer private readonly _taskDecomposer: IAgentTaskDecomposer,
 		@IAgentMemoryService private readonly _memoryService: IAgentMemoryService,
 		@IInstantiationService private readonly _instantiationService: IInstantiationService,
@@ -133,7 +123,7 @@ class NeuralInverseAgentService extends Disposable implements INeuralInverseAgen
 		this._approvalOverrides.clear();
 		const tiers = this._configService.config.approvalTiers;
 		for (const [toolName, tier] of Object.entries(tiers)) {
-			if (tier) this._approvalOverrides.set(toolName, tier as ApprovalTier);
+			if (tier) { this._approvalOverrides.set(toolName, tier as ApprovalTier); }
 		}
 	}
 
@@ -187,17 +177,12 @@ class NeuralInverseAgentService extends Disposable implements INeuralInverseAgen
 		// Transition directly to executing — full autonomy, no plan-approval gate
 		this._transitionStatus(task, 'executing');
 
-		// Create initial rollback checkpoint
-		const thread = this._chatThreadService.state.allThreads[threadId];
-		const msgIndex = thread?.messages?.length ?? 0;
-		this._rollbackService.createCheckpoint(threadId, `task_start:${task.id}`, msgIndex);
-
 		return task;
 	}
 
 	pauseTask(taskId: string): void {
 		const task = this._requireTask(taskId);
-		if (task.status !== 'executing') return;
+		if (task.status !== 'executing') { return; }
 
 		this._isPaused = true;
 		this._transitionStatus(task, 'paused');
@@ -205,7 +190,7 @@ class NeuralInverseAgentService extends Disposable implements INeuralInverseAgen
 
 	resumeTask(taskId: string): void {
 		const task = this._requireTask(taskId);
-		if (task.status !== 'paused') return;
+		if (task.status !== 'paused') { return; }
 
 		this._isPaused = false;
 		this._transitionStatus(task, 'executing');
@@ -219,7 +204,7 @@ class NeuralInverseAgentService extends Disposable implements INeuralInverseAgen
 
 	cancelTask(taskId: string): void {
 		const task = this._requireTask(taskId);
-		if (task.status === 'completed' || task.status === 'cancelled') return;
+		if (task.status === 'completed' || task.status === 'cancelled') { return; }
 
 		this._transitionStatus(task, 'cancelled');
 		this._chatThreadService.abortRunning(task.threadId);
@@ -232,28 +217,27 @@ class NeuralInverseAgentService extends Disposable implements INeuralInverseAgen
 	getApprovalTier(toolName: ToolName): ApprovalTier {
 		// Check user overrides first
 		const override = this._approvalOverrides.get(toolName);
-		if (override) return override;
+		if (override) { return override; }
 
 		// Check settings-level auto-approve (existing Void mechanism)
 		const globalAutoApprove = this._settingsService.state.globalSettings.autoApprove;
-		if (toolName in defaultApprovalTiers) {
-			const builtinTier = defaultApprovalTiers[toolName as keyof typeof defaultApprovalTiers];
-
+		const builtinTier = defaultApprovalTiers[toolName as keyof typeof defaultApprovalTiers];
+		if (builtinTier) {
 			// If the user has globally auto-approved the category, promote to auto
 			const riskLevel = getRiskLevel(toolName);
-			if (riskLevel === 'moderate' && globalAutoApprove['edits']) return 'auto';
-			if (riskLevel === 'destructive' && globalAutoApprove['terminal']) return 'auto';
+			if (riskLevel === 'moderate' && globalAutoApprove['edits']) { return 'auto'; }
+			if (riskLevel === 'destructive' && globalAutoApprove['terminal']) { return 'auto'; }
 
 			return builtinTier;
 		}
 
 		// MCP tools: check global MCP auto-approve
-		if (globalAutoApprove['MCP tools']) return 'auto';
+		if (globalAutoApprove['MCP tools']) { return 'auto'; }
 		return 'confirm';
 	}
 
 	shouldAutoApprove(toolName: ToolName): boolean {
-		if (!this._activeTask || this._activeTask.status !== 'executing') return false;
+		if (!this._activeTask || this._activeTask.status !== 'executing') { return false; }
 		const tier = this.getApprovalTier(toolName);
 		return tier === 'auto';
 	}
@@ -277,7 +261,7 @@ class NeuralInverseAgentService extends Disposable implements INeuralInverseAgen
 	}
 
 	getContextSummary(): string {
-		if (this._workingMemory.entries.length === 0) return '';
+		if (this._workingMemory.entries.length === 0) { return ''; }
 
 		const sections: string[] = [];
 
@@ -335,8 +319,8 @@ class NeuralInverseAgentService extends Disposable implements INeuralInverseAgen
 	 */
 	private _registerStreamStateListener(): void {
 		this._register(this._chatThreadService.onDidChangeStreamState(({ threadId }) => {
-			if (!this._activeTask || this._activeTask.threadId !== threadId) return;
-			if (this._isPaused) return;
+			if (!this._activeTask || this._activeTask.threadId !== threadId) { return; }
+			if (this._isPaused) { return; }
 
 			const task = this._activeTask;
 			const streamState = this._chatThreadService.streamState[threadId];
@@ -362,7 +346,7 @@ class NeuralInverseAgentService extends Disposable implements INeuralInverseAgen
 			// Auto-approve safe/notify tools
 			if (streamState?.isRunning === 'awaiting_user') {
 				const thread = this._chatThreadService.state.allThreads[threadId];
-				if (!thread) return;
+				if (!thread) { return; }
 
 				const lastMsg = thread.messages[thread.messages.length - 1];
 				if (lastMsg?.role === 'tool' && lastMsg.type === 'tool_request') {
@@ -440,7 +424,7 @@ class NeuralInverseAgentService extends Disposable implements INeuralInverseAgen
 							const existingReplan = task.replans.find(r => r.errorClass === errorClass);
 
 							if (!existingReplan || existingReplan.replanCount < AGENT_MAX_REPLANS) {
-								this._triggerReplan(task, threadId, errorClass, errorMsg);
+								this._triggerReplan(task, errorClass, errorMsg);
 							} else {
 								this._transitionStatus(task, 'failed');
 								this._logAction(task, { type: 'error', summary: `Replan limit reached for error class: ${errorClass}` });
@@ -476,9 +460,10 @@ class NeuralInverseAgentService extends Disposable implements INeuralInverseAgen
 		}
 		// Store tool usage pattern
 		if (task.totalToolCalls > 5) {
-			const toolSummary = task.steps
-				.flatMap(s => s.toolsUsed)
-				.reduce((acc, t) => { acc[t] = (acc[t] || 0) + 1; return acc; }, {} as Record<string, number>);
+			const toolSummary: Record<string, number> = {};
+			for (const t of task.steps.flatMap(s => s.toolsUsed)) {
+				toolSummary[t] = (toolSummary[t] ?? 0) + 1;
+			}
 			const topTools = Object.entries(toolSummary).sort((a, b) => b[1] - a[1]).slice(0, 5)
 				.map(([t, c]) => `${t}(${c})`).join(', ');
 			this._memoryService.remember('tool-usage', `Task "${task.goal}" used: ${topTools}`, ['tool-pattern']);
@@ -518,7 +503,7 @@ class NeuralInverseAgentService extends Disposable implements INeuralInverseAgen
 
 	private _trackToolContext(toolName: ToolName, toolMsg: { rawParams?: Record<string, unknown> }): void {
 		const task = this._activeTask;
-		if (!task) return;
+		if (!task) { return; }
 
 		const uri = toolMsg.rawParams?.['uri'] as string | undefined;
 
@@ -527,8 +512,8 @@ class NeuralInverseAgentService extends Disposable implements INeuralInverseAgen
 			const readTools = new Set(['read_file', 'ls_dir', 'get_dir_tree', 'search_in_file', 'read_lint_errors']);
 			const editTools = new Set(['edit_file', 'rewrite_file', 'multi_replace_file_content', 'create_file_or_folder']);
 
-			if (readTools.has(toolName)) task.filesRead.add(uri);
-			if (editTools.has(toolName)) task.filesModified.add(uri);
+			if (readTools.has(toolName)) { task.filesRead.add(uri); }
+			if (editTools.has(toolName)) { task.filesModified.add(uri); }
 		}
 
 		// Record into working memory
@@ -552,7 +537,7 @@ class NeuralInverseAgentService extends Disposable implements INeuralInverseAgen
 
 	private _spawnPreEditExplorer(task: AgentTask, targetUri: string): void {
 		const subAgentService = this._getSubAgentService();
-		if (!subAgentService) return;
+		if (!subAgentService) { return; }
 		const goal = `Read and understand ${targetUri} — its imports, exports, main patterns — to provide context for an upcoming edit.`;
 		const subAgent = subAgentService.spawn({
 			role: 'explorer',
@@ -590,7 +575,7 @@ class NeuralInverseAgentService extends Disposable implements INeuralInverseAgen
 
 	private _pruneMemoryIfNeeded(): void {
 		const mem = this._workingMemory;
-		if (mem.estimatedTokens <= mem.maxTokenBudget) return;
+		if (mem.estimatedTokens <= mem.maxTokenBudget) { return; }
 
 		const sorted = [...mem.entries].sort((a, b) => a.importance - b.importance);
 		while (mem.estimatedTokens > mem.maxTokenBudget * 0.8 && sorted.length > 0) {
@@ -605,15 +590,15 @@ class NeuralInverseAgentService extends Disposable implements INeuralInverseAgen
 
 	private _classifyError(errorMsg: string): string {
 		const lower = errorMsg.toLowerCase();
-		if (lower.includes('timeout')) return 'timeout';
-		if (lower.includes('permission') || lower.includes('eacces')) return 'permission';
-		if (lower.includes('not found') || lower.includes('enoent')) return 'not_found';
-		if (lower.includes('rate limit') || lower.includes('429')) return 'rate_limit';
-		if (lower.includes('parse') || lower.includes('syntax')) return 'parse_error';
+		if (lower.includes('timeout')) { return 'timeout'; }
+		if (lower.includes('permission') || lower.includes('eacces')) { return 'permission'; }
+		if (lower.includes('not found') || lower.includes('enoent')) { return 'not_found'; }
+		if (lower.includes('rate limit') || lower.includes('429')) { return 'rate_limit'; }
+		if (lower.includes('parse') || lower.includes('syntax')) { return 'parse_error'; }
 		return 'unknown';
 	}
 
-	private _triggerReplan(task: AgentTask, threadId: string, errorClass: string, errorMsg: string): void {
+	private _triggerReplan(task: AgentTask, errorClass: string, errorMsg: string): void {
 		const existing = task.replans.find(r => r.errorClass === errorClass);
 		if (existing) {
 			existing.replanCount++;
@@ -632,12 +617,6 @@ class NeuralInverseAgentService extends Disposable implements INeuralInverseAgen
 		const strategy = this._getCorrectionStrategy(errorClass);
 		this._scratchpadService.append('replan', `Replanning after ${errorClass}: ${strategy}`, 5);
 		this._logAction(task, { type: 'status_update', summary: `Replanning: ${strategy}` });
-
-		// Roll back to last checkpoint and inject corrective context
-		const checkpoint = this._rollbackService.getLatestCheckpoint(threadId);
-		if (checkpoint) {
-			this._rollbackService.rollback(checkpoint.id, `replan:${errorClass}`);
-		}
 	}
 
 	private _getCorrectionStrategy(errorClass: string): string {
