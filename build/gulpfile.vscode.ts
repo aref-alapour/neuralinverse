@@ -531,10 +531,27 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 	return task;
 }
 
+let warnedAboutMissingSigntool = false;
+
 function hasAuthenticodeSignature(filePath: string): Promise<boolean> {
 	return new Promise((resolve, reject) => {
 		const proc = cp.spawn('signtool.exe', ['verify', '/pa', filePath]);
-		proc.on('error', reject);
+		proc.on('error', err => {
+			// signtool.exe ships with the Windows SDK and is present on signing
+			// machines, not necessarily on a developer box. A local build produces
+			// unsigned binaries anyway, so "cannot ask" and "not signed" lead to the
+			// same action here: skip the strip and let rcedit stamp the PE directly.
+			// Any other spawn failure is still a real error.
+			if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+				if (!warnedAboutMissingSigntool) {
+					warnedAboutMissingSigntool = true;
+					console.warn('[patch-win32-dependencies] signtool.exe not found — assuming binaries are unsigned and skipping signature stripping. Release builds must run on a machine with the Windows SDK.');
+				}
+				resolve(false);
+				return;
+			}
+			reject(err);
+		});
 		proc.on('exit', code => resolve(code === 0));
 	});
 }
@@ -619,6 +636,20 @@ function prepareCopilotRipgrepShimTask(platform: string, arch: string, destinati
 	};
 }
 
+/**
+ * Whether the built-in GitHub Copilot Chat extension is part of the product.
+ *
+ * This fork ships its own agent: `voidModelProvider` registers the default chat
+ * agent backed by the user's own LLM providers, so Copilot Chat is not the brain
+ * of the native chat here and nothing in the product depends on it being present.
+ * Packaging it also broke the Windows build - `prepareBuiltInCopilotRipgrepShim`
+ * cannot find the SDK tree in the assembled app (task Q14) - and pulled a large
+ * extension plus its platform binaries into the installer for no product benefit.
+ *
+ * Flip to `true` to put it back; the three call sites below are all guarded by it.
+ */
+const includeBuiltInCopilotExtension = false;
+
 const buildRoot = path.dirname(root);
 
 const BUILD_TARGETS = [
@@ -644,8 +675,11 @@ BUILD_TARGETS.forEach(buildTarget => {
 			compileNativeExtensionsBuildTask,
 			util.rimraf(path.join(buildRoot, destinationFolderName)),
 			packageTask(platform, arch, sourceFolderName, destinationFolderName, opts),
-			prepareCopilotRipgrepShimTask(platform, arch, destinationFolderName)
 		];
+
+		if (includeBuiltInCopilotExtension) {
+			packageTasks.push(prepareCopilotRipgrepShimTask(platform, arch, destinationFolderName));
+		}
 
 		if (platform === 'win32') {
 			packageTasks.push(patchWin32DependenciesTask(destinationFolderName));
@@ -670,7 +704,7 @@ BUILD_TARGETS.forEach(buildTarget => {
 				copyCodiconsTask,
 				cleanExtensionsBuildTask,
 				compileNonNativeExtensionsBuildTask,
-				compileCopilotExtensionBuildTask,
+				...(includeBuiltInCopilotExtension ? [compileCopilotExtensionBuildTask] : []),
 				compileExtensionMediaBuildTask,
 				writeISODate('out-build'),
 				esbuildBundleTask,
@@ -681,7 +715,7 @@ BUILD_TARGETS.forEach(buildTarget => {
 				minified ? compileBuildWithManglingTask : compileBuildWithoutManglingTask,
 				cleanExtensionsBuildTask,
 				compileNonNativeExtensionsBuildTask,
-				compileCopilotExtensionBuildTask,
+				...(includeBuiltInCopilotExtension ? [compileCopilotExtensionBuildTask] : []),
 				compileExtensionMediaBuildTask,
 				minified ? minifyVSCodeTask : bundleVSCodeTask,
 				vscodeTaskCI
