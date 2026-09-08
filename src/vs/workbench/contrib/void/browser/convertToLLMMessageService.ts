@@ -662,6 +662,8 @@ export interface IConvertToLLMMessageService {
 	generateSystemMessage(chatMode: ChatMode, specialToolFormat: 'openai-style' | 'anthropic-style' | 'gemini-style' | undefined, allowedToolNames?: string[], providerName_?: string, modelName_?: string): Promise<string>;
 	/** Formatted workspace rule files (AGENTS.md / CLAUDE.md / .neuralinverserules — task E1) for callers that build their own system message (the native chat bridge). */
 	getWorkspaceRuleFiles(): string;
+	/** Chat-path AI instructions incl. hybrid memory recall (task A8) for callers that build their own system message (the native chat bridge). */
+	getAIInstructionsForChat(querySeed?: string): Promise<string>;
 }
 
 export const IConvertToLLMMessageService = createDecorator<IConvertToLLMMessageService>('ConvertToLLMMessageService');
@@ -889,10 +891,27 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 		return ans.join('\n\n');
 	}
 
-	/** Chat path variant: the agent context comes from query-aware hybrid memory recall (task M2). */
-	private async _getCombinedAIInstructionsForChat(): Promise<string> {
-		const agentContext = await this._getAgentService()?.getContextSummaryAsync() ?? '';
+	/**
+	 * Chat path variant: the agent context comes from query-aware hybrid memory
+	 * recall (task M2). When no workflow agent is running (a plain chat), the
+	 * agent context is empty and `querySeed` — the user's message — drives the
+	 * recall instead (task A8), so stored memories surface in fresh chats.
+	 */
+	private async _getCombinedAIInstructionsForChat(querySeed?: string): Promise<string> {
+		let agentContext = await this._getAgentService()?.getContextSummaryAsync() ?? '';
+		if (!agentContext && querySeed) {
+			agentContext = await this._getAgentService()?.getChatMemoryContext(querySeed) ?? '';
+		}
 		return this._getCombinedAIInstructions(agentContext);
+	}
+
+	/**
+	 * Public wrapper for callers that build the system message themselves — the
+	 * native chat bridge (task A8). Same content the sidebar path injects via
+	 * prepareLLMChatMessages.
+	 */
+	public async getAIInstructionsForChat(querySeed?: string): Promise<string> {
+		return this._getCombinedAIInstructionsForChat(querySeed);
 	}
 
 
@@ -1030,8 +1049,10 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 
 		const modelSelectionOptions = this.voidSettingsService.state.optionsOfModelSelection['Chat'][modelSelection.providerName]?.[modelSelection.modelName];
 
-		// Get combined AI instructions
-		const aiInstructions = await this._getCombinedAIInstructionsForChat();
+		// Get combined AI instructions — seeded with the user's message so hybrid
+		// memory recall works in fresh chats too, not only under a workflow agent
+		const lastUserContent = [...chatMessages].reverse().find(m => m.role === 'user')?.content ?? '';
+		const aiInstructions = await this._getCombinedAIInstructionsForChat(lastUserContent);
 		const isReasoningEnabled = getIsReasoningEnabledState('Chat', providerName, modelName, modelSelectionOptions, overridesOfModel);
 		const reservedOutputTokenSpace = getReservedOutputTokenSpace(providerName, modelName, { isReasoningEnabled, overridesOfModel });
 		const llmMessages = this._chatMessagesToSimpleMessages(chatMessages);

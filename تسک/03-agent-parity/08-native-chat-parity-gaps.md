@@ -1,8 +1,22 @@
 # A8 — چت بومی از دو قابلیتِ سایدبار جا مانده
 
-- **اولویت:** P1 | **برآورد:** S | **وضعیت:** 🔴
+- **اولویت:** P1 | **برآورد:** S | **وضعیت:** 🟡 (پیاده‌سازی سورس + تست پاریتی standalone؛ تست owner با بیلد نصبی باز)
 - **کشف:** ۲۰۲۶-۰۹-۰۹، حین ریشه‌یابی تست زنده‌ی owner
 - **مرتبط:** ادامه‌ی [A7](07-native-chat-bridge.md) — همان الگو، دو نقطه‌ی جامانده
+
+## ریشه‌یابی دقیق‌تر (بعد از کدخوانی، ۰۹-۰۹)
+
+- شکاف ۲ عمیق‌تر از «ثبت نمی‌شود» بود: ابزارهای recall در
+  `IVoidInternalToolService` ثبت می‌شوند و اسکیمای XMLشان از طریق
+  `generateSystemMessage('agent',…)` به پیام سیستمی پل می‌رسید — ولی
+  (الف) `extractXMLToolsWrapper` فقط XML ابزارهایی را استخراج می‌کند که در
+  فهرست `mcpTools` خودش باشند و پل فقط `copilotMcpTools` می‌داد، و (ب) در
+  حلقه‌ی اجرا شاخه‌ای برای internal tools نبود و به else «Tool ... is not
+  available» می‌افتاد (voidModelProvider — دقیقاً همان پیامی که owner دید).
+- شکاف ۱ هم لایه‌ی سومی داشت: کوئری recall در `getContextSummaryAsync` از
+  working memory مربوط به workflow agent می‌آمد که در چت معمولی (حتی سایدبار)
+  خالی است → `''` زودهنگال. پس صرفاً async کردن، تست ۲ را سبز نمی‌کرد؛
+  کوئری باید از پیام خود کاربر بگذرد.
 
 ## الگوی تکرارشونده
 
@@ -54,3 +68,23 @@ grep -n "getTools\|copilotMcpTools" src/vs/workbench/contrib/void/browser/voidMo
    [Q12](../05-quality/12-desktop-usage-parity.md) اینجا هم جواب می‌دهد: هر
    قابلیتی که سایدبار دارد و پل ندارد باید سوئیت را قرمز کند. بدون این گیت،
    شکاف سوم و چهارم هم به همین شکل کشف خواهند شد — یکی‌یکی و با تست دستی.
+
+## رفع ثبت‌شده (۰۹-۰۹)
+
+1. **حافظه:** `getAIInstructionsForChat(querySeed?)` عمومی شد روی
+   `IConvertToLLMMessageService`؛ پل آن را با پیام کاربر صدا می‌زند و به
+   system message می‌چسباند (الگوی workspace_rules از E1). در مسیر سایدبار،
+   `prepareLLMChatMessages` آخرین پیام کاربر را به‌عنوان querySeed می‌دهد و
+   متد جدید `getChatMemoryContext(query)` روی سرویس agent (کلید = پیام کاربر،
+   نه working memory) وقتی agent context خالی است جانشین می‌شود — یعنی چت
+   تازه هم recall معنایی می‌گیرد، سایدبار و پل هر دو.
+2. **ابزارهای recall:** پل `internalToolService.getToolInfos()` را مثل
+   chatThreadService با copilotMcpTools ادغام می‌کند (internal اول، dedup،
+   سقف ۱۲۸) و همان فهرست به `_callLLM` → extractor/sendLLMMessage می‌رسد؛
+   شاخه‌ی اجرای internal tools قبل از fallback «not available» اضافه شد و به
+   `internalToolService.execute` می‌رود.
+3. **تست پاریتی:** `test/node/nativeChatParity.test.ts` (الگوی Q12، پارس
+   سورس هر دو مسیر) با ۵ لنگر: رساندن حافظه به پل، seed شدن کوئری از پیام
+   کاربر، پیشنهاد internal tools توسط پل، اجرایشان، و ماندن 'agent' در شرط
+   internal tools سازنده‌ی پیام سیستمی. ثبت در typecheck-slice.json؛
+   verify.mjs = ۱۵۱ تست سبز.

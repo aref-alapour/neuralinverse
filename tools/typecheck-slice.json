@@ -53,6 +53,7 @@
     "src/vs/workbench/contrib/void/test/node/ossRetryGuard.test.ts",
     "src/vs/workbench/contrib/void/test/node/streamIntegrity.test.ts",
     "src/vs/workbench/contrib/void/test/node/sendLLMMessageParity.test.ts",
+    "src/vs/workbench/contrib/void/test/node/nativeChatParity.test.ts",
     "src/vs/workbench/contrib/neuralInverseFirmware/test/browser/engine/projectConfig/checkpointSnapshot.test.ts",
     "src/vs/workbench/contrib/void/test/node/workspaceRuleFiles.test.ts",
     "src/vs/workbench/contrib/void/test/browser/agentMemoryHybrid.test.ts"

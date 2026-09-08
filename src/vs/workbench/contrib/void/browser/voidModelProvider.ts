@@ -52,6 +52,7 @@ import { generateUuid } from '../../../../base/common/uuid.js';
 import { InternalToolInfo, isABuiltinToolName } from '../common/prompt/prompts.js';
 import { approvalTypeOfBuiltinToolName, BuiltinToolName } from '../common/toolsServiceTypes.js';
 import { IContextLedgerService } from './contextLedgerService.js';
+import { IVoidInternalToolService } from './voidInternalToolService.js';
 import { ILedgerAppendInput } from '../common/ledgerTypes.js';
 import { chatSessionResourceToId } from '../../chat/common/model/chatUri.js';
 
@@ -480,6 +481,7 @@ class VoidChatAgentImpl implements IChatAgentImplementation {
 		private readonly _toolsService: IToolsService,
 		private readonly _convertService: IConvertToLLMMessageService,
 		private readonly _contextLedgerService: IContextLedgerService,
+		private readonly _internalToolService: IVoidInternalToolService,
 	) { }
 
 	/**
@@ -534,6 +536,23 @@ class VoidChatAgentImpl implements IChatAgentImplementation {
 			.filter(t => isToolAllowed(t.id))
 			.map(copilotToolToInternalToolInfo);
 
+		// Void internal tools (ledger recall, discovery, …) are part of the
+		// sidebar's tool list for agent chatModes (chatThreadService merges
+		// internalToolService.getToolInfos() the same way). The bridge must
+		// offer AND execute them too, or the system message advertises tools
+		// the loop can never run — exactly how recall_history went missing in
+		// the owner's live test (task A8). Internal tools win name conflicts.
+		const allBridgeTools: InternalToolInfo[] = (() => {
+			const seen = new Set<string>();
+			return [...this._internalToolService.getToolInfos(), ...copilotMcpTools]
+				.filter(t => {
+					if (seen.has(t.name)) { return false; }
+					seen.add(t.name);
+					return true;
+				})
+				.slice(0, 128); // API hard limit
+		})();
+
 		// Build message history as plain OpenAI-style messages.
 		// Do NOT pass a systemMessage here — chatMode:'agent' in sendLLMMessage triggers void's
 		// pipeline to build the full system message (workspace context + all tool schemas).
@@ -561,6 +580,15 @@ class VoidChatAgentImpl implements IChatAgentImplementation {
 		const { providerName: pn, modelName: mn } = modelSelection;
 		let systemMessage = await this._convertService.generateSystemMessage('agent', undefined, undefined, pn, mn);
 
+		// Hybrid agent memory (tasks M2/A8): the sidebar path injects these
+		// instructions via prepareLLMChatMessages — which the bridge bypasses —
+		// so it appends the same block itself (the workspace-rules pattern from
+		// E1). Seeded with the user's message so recall works in fresh chats.
+		const aiInstructions = await this._convertService.getAIInstructionsForChat(userMessage);
+		if (aiInstructions) {
+			systemMessage = `${systemMessage}\n\n${aiInstructions}`;
+		}
+
 		// Workspace rule files (task E1): generateSystemMessage does not carry
 		// them (they enter the sidebar path through prepareLLMChatMessages), so
 		// the bridge appends the same formatted block itself.
@@ -584,7 +612,7 @@ class VoidChatAgentImpl implements IChatAgentImplementation {
 			iterations++;
 
 			const { text, toolCalls, usage } = await this._callLLM(
-				loopMessages, modelSelection, state, copilotMcpTools, systemMessage, token
+				loopMessages, modelSelection, state, allBridgeTools, systemMessage, token
 			);
 
 			if (token.isCancellationRequested) { break; }
@@ -848,6 +876,21 @@ class VoidChatAgentImpl implements IChatAgentImplementation {
 						toolResultError: isError || undefined,
 						toolResultMessage: pastTenseMsg ? new MarkdownString(pastTenseMsg) : undefined,
 					});
+				} else if (this._internalToolService.has(toolName)) {
+					// --- Void internal tools (ledger recall, KB discovery — task A8) ---
+					// Registered by contributions, read-only by design, and the sidebar
+					// runs them through this same service — the bridge must route them
+					// too, or the model is shown a tool it can never call (the exact
+					// "recall_history is not available" failure from the live test).
+					// No approval flow: they never mutate the workspace.
+					let internalError = false;
+					try {
+						toolResultText = await this._internalToolService.execute(toolName, rawParams);
+					} catch (e) {
+						toolResultText = `Tool error: ${messageOfThrown(e)}`;
+						internalError = true;
+					}
+					await invocation.didExecuteTool({ content: [{ kind: 'text', value: toolResultText }], toolResultError: internalError || undefined });
 				} else {
 					toolResultText = `Tool "${toolName}" is not available.`;
 					await invocation.didExecuteTool({ content: [{ kind: 'text', value: toolResultText }], toolResultError: true });
@@ -946,6 +989,7 @@ class VoidModelProvider extends Disposable implements IWorkbenchContribution, IL
 		@IToolsService private readonly _toolsService: IToolsService,
 		@IConvertToLLMMessageService private readonly _convertService: IConvertToLLMMessageService,
 		@IContextLedgerService private readonly _contextLedgerService: IContextLedgerService,
+		@IVoidInternalToolService private readonly _internalToolService: IVoidInternalToolService,
 	) {
 		super();
 
@@ -977,7 +1021,7 @@ class VoidModelProvider extends Disposable implements IWorkbenchContribution, IL
 		// Register default chat agent once — it stays for the session
 		if (!this._agentRegistered) {
 			this._agentRegistered = true;
-			const agentImpl = new VoidChatAgentImpl(this._settingsService, this._llmMessageService, this._lmToolsService, this._toolsService, this._convertService, this._contextLedgerService);
+			const agentImpl = new VoidChatAgentImpl(this._settingsService, this._llmMessageService, this._lmToolsService, this._toolsService, this._convertService, this._contextLedgerService, this._internalToolService);
 			const ds = new DisposableStore();
 
 			ds.add(this._chatAgentService.registerAgent(NI_AGENT_ID, {

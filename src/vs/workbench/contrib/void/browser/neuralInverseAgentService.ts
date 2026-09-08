@@ -76,6 +76,14 @@ export interface INeuralInverseAgentService {
 	getContextSummary(): string;
 	/** Query-aware variant used by the production injection path (task M2) — hybrid memory recall instead of the sync summary */
 	getContextSummaryAsync(): Promise<string>;
+	/**
+	 * Chat-path memory recall keyed by the user's message (task A8): in a plain
+	 * chat no workflow agent is running, so working memory is empty and
+	 * getContextSummaryAsync would never surface stored memories. Returns the
+	 * wrapped `Agent Memory` block, or '' when the query is empty / nothing
+	 * clears the score floor. Never throws.
+	 */
+	getChatMemoryContext(query: string): Promise<string>;
 }
 
 export const INeuralInverseAgentService = createDecorator<INeuralInverseAgentService>('neuralInverseAgentService');
@@ -371,6 +379,17 @@ class NeuralInverseAgentService extends Disposable implements INeuralInverseAgen
 		}
 
 		return sections.join('\n\n');
+	}
+
+	async getChatMemoryContext(query: string): Promise<string> {
+		const trimmed = query.trim();
+		if (!trimmed) { return ''; }
+		try {
+			const block = await this._memoryService.recallForPrompt(trimmed, 1500, 8);
+			return block ? `<persistent_memory>\n${block}\n</persistent_memory>` : '';
+		} catch {
+			return ''; // recall must never break the send
+		}
 	}
 
 
