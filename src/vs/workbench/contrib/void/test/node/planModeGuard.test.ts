@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { withPlanModeGuard } from '../../browser/toolsService.js';
 
 // ---------------------------------------------------------------------------
