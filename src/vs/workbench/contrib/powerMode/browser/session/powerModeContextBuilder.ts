@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Neural Inverse Corporation. All rights reserved.
- *  Contains ideas from opencode (MIT); implemented in our own words and architecture.
+ *  Original: MIT License - Copyright (c) SST (opencode)
+ *  Modified: Neural Inverse Corporation
  *--------------------------------------------------------------------------------------------*/
 
 /**

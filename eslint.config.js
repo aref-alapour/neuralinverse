@@ -154,7 +154,6 @@ export default defineConfig(
 			'src/vs/workbench/contrib/neuralInverseEnclave/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}',
 			'src/vs/workbench/contrib/neuralInverseFirmware/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}',
 			'src/vs/workbench/contrib/neuralInverseModernisation/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}',
-			'src/vs/workbench/contrib/powerMode/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}',
 			'tools/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}',
 		],
 		rules: {
@@ -166,6 +165,31 @@ export default defineConfig(
 					{ pattern: '^ \\*\\s+Copyright .*Neural\\s?Inverse.*All rights reserved\\.$' },
 					{ pattern: '^ \\*\\s+\\S.*$' },
 					{ pattern: '^ \\*-{20,}$' }
+				]
+			]
+		},
+	},
+	// Power Mode carries a derivative-work header: the contrib was built from opencode
+	// (MIT), and MIT requires the upstream copyright notice to survive in the derivative.
+	// The rule stays enforced — a file still cannot ship without a header — but the
+	// expected shape is the two-line "Original: … / Modified: …" attribution rather than
+	// a bare Neural Inverse notice. Rewriting these headers to satisfy the fork pattern
+	// would drop the SST notice, which is exactly what the licence forbids; if a file here
+	// is ever established to be genuinely clean-room, retitle it deliberately, not to
+	// silence a lint rule.
+	{
+		files: [
+			'src/vs/workbench/contrib/powerMode/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}',
+		],
+		rules: {
+			'header/header': [
+				2,
+				'block',
+				[
+					'---------------------------------------------------------------------------------------------',
+					' *  Original: MIT License - Copyright (c) SST (opencode)',
+					' *  Modified: Neural Inverse Corporation',
+					' *--------------------------------------------------------------------------------------------'
 				]
 			]
 		},

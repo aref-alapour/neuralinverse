@@ -35,8 +35,22 @@ const forkCopyrightHeaderPatterns = [
 	/^ \*-{20,}\*\/$/,
 ];
 
+// Ported contribs (currently powerMode, from opencode) keep the upstream copyright
+// notice above our own, because that is what the source licence requires of a
+// derivative. A header is still mandatory here — only its shape differs. Do not
+// "fix" one of these files by replacing the notice with the fork header: that drops
+// an attribution the licence obliges us to carry. See the matching block in
+// eslint.config.js.
+const derivedCopyrightHeaderPatterns = [
+	/^\/\*-{20,}$/,
+	/^ \*\s+Original: .+$/,
+	/^ \*\s+Modified: .+$/,
+	/^ \*-{20,}\*\/$/,
+];
+
 function hasForkCopyrightHeader(lines: string[]): boolean {
-	return forkCopyrightHeaderPatterns.every((pattern, i) => pattern.test(lines[i] ?? ''));
+	const matches = (patterns: RegExp[]) => patterns.every((pattern, i) => pattern.test(lines[i] ?? ''));
+	return matches(forkCopyrightHeaderPatterns) || matches(derivedCopyrightHeaderPatterns);
 }
 
 interface VinylFileWithLines extends VinylFile {
