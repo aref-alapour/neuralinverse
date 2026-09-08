@@ -15,6 +15,17 @@ import './browser/workbench.zenMode.contribution.js';
 import './contrib/void/browser/void.contribution.js';
 import './contrib/neuralInverseModernisation/browser/neuralInverseModernisation.contribution.js';
 import './contrib/neuralInverseFirmware/browser/neuralInverseFirmware.contribution.js';
+// The main Neural Inverse contribution (Agent Manager panel, background agent
+// service + panel + commands, composer, agent store, model marketplace) is
+// intentionally NOT registered (task Q13, owner decision 2026-09-08): the
+// background-agent loop has no LLM wired up yet (prerequisite: task A1), so
+// importing this now would surface a broken panel to users. The parts of that
+// folder that ARE production-ready (workflow agent engine, context engine,
+// FIM service) load transitively via void.contribution.ts above instead.
+// Condition for registering: land task A1 (wire the LLM into background
+// agents), then uncomment the import below and drop the Q13 allowlist entries
+// for it (and powerMode.contribution) in tools/verify.mjs.
+// import './contrib/neuralInverse/browser/neuralInverse.contribution.js';
 // Checks and Enclave are not built yet: their UI parts are written against 9 and 15
 // services respectively that do not exist in the tree (task Q10). They are excluded
 // from the compile in src/tsconfig.json and unregistered here until those land.

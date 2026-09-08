@@ -155,6 +155,7 @@ export default defineConfig(
 			'src/vs/workbench/contrib/neuralInverseFirmware/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}',
 			'src/vs/workbench/contrib/neuralInverseModernisation/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}',
 			'src/vs/workbench/contrib/powerMode/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}',
+			'tools/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}',
 		],
 		rules: {
 			'header/header': [
