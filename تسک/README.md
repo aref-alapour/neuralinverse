@@ -79,12 +79,12 @@
 | Background Agents (تسک → PR) | 🔴 LLM وصل نیست **و سرویس ثبت نشده**؛ upstream پوسته‌ی کامل دارد | [A1](03-agent-parity/01-background-agents-loop.md) | **P0** |
 | Checkpoints (restore فایل) | ⭐ **دو پیاده‌سازی کامل داریم** (firmware + upstream)، هیچ‌کدام وصل نیست | [A3](03-agent-parity/03-file-checkpoints.md) | P1 |
 | سطح‌های auto-run / مجوز واحد | ⚠️ چهار مدل پراکنده؛ upstream مرجع آماده دارد | [A4](03-agent-parity/04-unified-permissions.md) | P1 |
-| Plan mode | 🔴 **تله: فلگ set می‌شود، هرگز خوانده نمی‌شود** | [A5](03-agent-parity/05-plan-mode.md) | **P1** |
+| Plan mode | 🟡 **تله بسته شد (۰۹-۰۸):** گارد در مرز `callTool` نوشتن/اجرای ۱۸ ابزار را در plan رد می‌کند؛ پورت live-patch، تست owner و قدم‌های بعدی A5 باز | [A5](03-agent-parity/05-plan-mode.md) | **P1** |
 | Composer (planner/worker) | ⚠️ sub-agent زنده، ولی ماژول composer ثبت نشده | [A6](03-agent-parity/06-multi-agent-composer.md) | P2 |
 | Rules (استاندارد صنعت) | ⭐ upstream کامل دارد (AGENTS.md/CLAUDE.md)، ما وصل نیستیم | [E1](04-ecosystem/01-agents-md-compat.md) | **P0** |
 | Skills / Hooks | ⭐ upstream هر دو را دارد (`.claude/skills` + hookCompatibility) | [E2](04-ecosystem/02-skills-and-hooks.md) | P2 |
 | اجرای CLI/CI (مثل `claude -p`) | ❌ | [E3](04-ecosystem/03-cli-headless.md) | P2 |
-| Usage / هزینه | 🟡 محاسبه واقعی است، ولی روی desktop اصلاً `usage` نمی‌رسد | [Q1](05-quality/01-cost-usage-tracking.md) + [Q12](05-quality/12-desktop-usage-parity.md) | **P0** |
+| Usage / هزینه | 🟡 `usage` روی desktop می‌رسد (۰۹-۰۸: هر دو مسیر chat + تست پاریتی)؛ تست owner روی نسخه‌ی نصبی باز | [Q1](05-quality/01-cost-usage-tracking.md) + [Q12](05-quality/12-desktop-usage-parity.md) | **P0** |
 | Tab (autocomplete) | ✅ داریم | — | — |
 | Inline edit (Ctrl+K) | ✅ داریم | — | — |
 | Apply / diff | ✅ Fast+Slow داریم | — | — |
@@ -119,7 +119,8 @@ compaction ای که از نظر الگوریتم جلوتر است.
 2. **C2** نمایشگر مصرف context — ویجت upstream هست؛ فقط تغذیه
 3. **C7** UX دی compaction (`/compact` + کارت summary)
 4. **Q1** هزینه‌ی واقعی + داشبورد Usage (بعد از Q12)
-5. **Q2** بهداشت کدبیس (۷ فایل `.bak` + یک `.js` مرده) + `live-patch --verify`
+5. **Q2** بهداشت کدبیس — ✅ بخش حذف‌ها (۰۹-۰۸: ۷ فایل `.bak` حذف؛ «`.js` مرده» در واقع
+   **شیمِ زنده‌ی** ۸ از ۹ باندل React بود و ماند)؛ پیشنهاد N5 منتظر تصمیم owner
 
 ### دسته‌ی ۲ — حافظه (قلب استراتژی؛ ادامه‌ی branch فعلی)
 > **ستون فقرات این دسته [M5](01-memory/05-context-ledger.md) است.** M1 (ماندگاری) در فاز ۰/۵
@@ -205,10 +206,11 @@ compaction ای که از نظر الگوریتم جلوتر است.
 | M2 | 🟡 | درون `feat/context-ledger` | بازیابی hybrid + pin + سقف ۲۰۰۰ پیاده شد؛ تست owner مانده |
 | M3 / M4 | 🔴 | — | روی زیرساخت M5 در session بعدی |
 | **A7** | 🔴 | — | **جدید ۰۹-۰۸** — سخت‌سازی پل چت بومی؛ پرلوریج‌ترین تسک بک‌لاگ |
-| **Q12** | 🔴 | — | **جدید ۰۹-۰۸** — `usage` روی desktop نمی‌رسد (P0، برآورد S) |
-| **Q13** | 🔴 | — | **جدید ۰۹-۰۸** — گیت ثبت contribution؛ بلاک‌کننده‌ی A1/A6 |
+| **Q12** | 🟡 | `213acb1`, `a5ccefb` | usage روی desktop می‌رسد (هر دو مسیر chat + تست پاریتی در verify)؛ پورت live-patch + تست owner باز؛ ~۱۵ هشدار لینت سخت فایل باقی (Q11) |
+| **Q13** | 🟡 | `3e16228` | گیت reachability در verify.mjs (با هوک hygiene سبز)؛ ۲۵۹ فایل، ۶ یتیم مستند، ۰ غیرمنتظره؛ تصمیم voiceEventStream با owner |
+| **Q2** | 🟡 | `b43716a` | ۷ فایل `.bak` حذف + `*.bak*` ignore؛ شیم `backgroundAgentService.js` زنده درآمد و ماند؛ پیشنهاد N5 (گزینه A) منتظر تصمیم owner |
 | A3 | 🟡 | — | **اصلاح ۰۹-۰۸** — از 🔴؛ دو پیاده‌سازی کامل داریم، دامنه شد «اتصال» |
-| A5 | 🔴 | — | **اصلاح ۰۹-۰۸** — اولویت P2→P1؛ فلگ plan هرگز خوانده نمی‌شود |
+| A5 | 🟡 | `feffd9a`, `85335f0` | قدم اول بسته شد: enforce در مرز `callTool` (۱۸ ابزار نویسنده/اجرایی) + ۸ تست؛ پورت live-patch، تست owner و قدم‌های بعدی باز؛ ~۳۱ هشدار لینت سخت فایل باقی (Q11) |
 | Q1 | 🟡 | — | **اصلاح ۰۹-۰۸** — از 🔴؛ ادعای هاردکد `$0.0000` باطل شد |
 | G6 | 🔴 | — | **اصلاح ۰۹-۰۸** — از 🟡؛ مارکر به صف دیگری اشاره داشت |
 | **M6** | ✅ | `235aef5`, `2c34e79` | سخت‌سازی Ledger بسته شد (فایل تسک ✅)؛ تست زنده‌ی Ledger همچنان مانده (S3 در وضعیت ۲۰۲۶-۰۹-۰۶) |
