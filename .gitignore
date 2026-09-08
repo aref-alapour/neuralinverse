@@ -45,3 +45,6 @@ tools/__pycache__/
 tools/.verify/*.log
 tools/.verify/*.jpg
 tools/.verify/*.png
+
+# editor backup files (task Q2 — the 7 tracked .bak* files were removed; never re-add)
+*.bak*
