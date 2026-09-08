@@ -33,11 +33,60 @@ ls extensions/copilot/node_modules/@github/copilot/          # سورس
 ls ../VSCode-win32-x64/resources/app/extensions/copilot/node_modules/@github/copilot/
 ```
 
-**۳. `.moduleignore` توضیح‌دهنده نیست.** `build/.moduleignore:218` فقط
-`@github/copilot/sdk/index.js` را می‌گیرد، نه کل `sdk/**`. پس ۳۲ فایل دیگر باید
-می‌ماندند. یعنی حذف از جای دیگری است — کاندیداها: `getCopilotExcludeFilter`،
-مرحله‌ی کپی `node_modules` در `gulpfile.vscode.ts`، یا رفتار `.moduleignore` روی
-دایرکتوری‌هایی که فایل اصلی‌شان strip شده.
+**۳. `.moduleignore` قطعاً علت نیست — تجربی رد شد.** قوانین روی ۳۳ فایل واقعی
+`sdk/` اجرا شد: **۳۱ تا می‌مانند**، فقط `index.js` (قانون ۲۱۸) و `index.d.ts`
+(قانون عمومی `**/*.ts`) حذف می‌شوند.
+
+```bash
+node -e "
+const fs=require('fs'),path=require('path');
+const mmMod=require('minimatch'); const mm=typeof mmMod==='function'?mmMod:(mmMod.minimatch||mmMod.default);
+const rules=fs.readFileSync('build/.moduleignore','utf8').split(/\r?\n/g).map(l=>l.trim()).filter(l=>l&&!/^#/.test(l));
+const excludes=rules.filter(l=>!/^!/.test(l)).map(l=>'**/node_modules/'+l);
+const base='extensions/copilot/node_modules/@github/copilot/sdk';
+const walk=d=>fs.readdirSync(d,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(path.join(d,e.name)):[path.join(d,e.name)]);
+const files=walk(base).map(f=>f.split(path.sep).join('/'));
+let kept=0,dropped=0; for(const f of files){ excludes.find(e=>mm(f,e)) ? dropped++ : kept++; }
+console.log('total',files.length,'kept',kept,'dropped',dropped);"
+# → total 33 kept 31 dropped 2
+```
+
+**۴. مسیر جمع‌آوری وابستگی درست کار می‌کند.** ابتدا به اشتباه فکر کردم
+`getProductionDependencies('extensions/')` مقصر است (فقط ۱ وابستگی برمی‌گرداند —
+`typescript`)، ولی این طراحی است: آن فایل فقط وابستگی‌های **مشترک** را دارد.
+کوپایلت مسیر اختصاصی خودش را دارد (`packageCopilotExtensionStream`،
+`extensions.ts:464`) و آن درست است:
+
+```bash
+node --experimental-strip-types -e "
+import('./build/lib/dependencies.ts').then(m=>{
+  const d=m.getProductionDependencies('extensions/copilot');
+  console.log('total:', d.length);
+  d.filter(x=>x.includes('@github')).forEach(x=>console.log(' ', x));});"
+# → total: 323، شامل @github/copilot
+```
+
+**۵. 🎯 نقطه‌ی افت دقیقاً مشخص شد: `sdk/` در `.build` هست و در اپ نهایی نیست.**
+
+```bash
+ls -d .build/extensions/copilot/node_modules/@github/copilot/sdk        # هست
+ls -d ../VSCode-win32-x64/resources/app/extensions/copilot/node_modules/@github/copilot/sdk   # نیست
+```
+
+یعنی `packageCopilotExtensionStream` وظیفه‌اش را درست انجام داده و افت **در
+مونتاژ نهایی** (`packageTask` در `gulpfile.vscode.ts`) رخ می‌دهد — همان‌جا که
+خط ۲۷۱ `.build/extensions/**` را کپی می‌کند.
+
+**۶. ترتیب taskها درست است** (`gulpfile.vscode.ts:643-647`): ابتدا `rimraf`، بعد
+`packageTask`، بعد `prepareCopilotRipgrepShimTask`. پس فرضیه‌ی «shim زودتر از کپی
+اجرا می‌شود» رد شد.
+
+**قدم بعدی برای هرکس این را برمی‌دارد:** تنها شکاف باقی‌مانده داخل `packageTask`
+است — بین `gulp.src(['.build/extensions/**'], { base: '.build', dot: true })` در
+خط ۲۷۱ و آنچه واقعاً روی دیسک می‌نشیند. کاندیداها: فیلتری در ادامه‌ی همان
+pipeline، یا `createAsar`، یا محدودیت طول مسیر ویندوز روی مسیرهای عمیق
+(`sdk/tgrep/bin/...` نسبتاً عمیق است و ویندوز سقف ۲۶۰ کاراکتری دارد — این را
+راستی‌آزمایی نکردم و کاندیدای جدی است).
 
 **۴. تناقض قرارداد:** `.moduleignore` عمداً `sdk/index.js`، `ripgrep/**` و
 `prebuilds/**` را حذف می‌کند، ولی `prepareBuiltInCopilotRipgrepShim`
