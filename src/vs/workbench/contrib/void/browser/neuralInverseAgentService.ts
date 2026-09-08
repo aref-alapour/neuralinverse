@@ -74,6 +74,8 @@ export interface INeuralInverseAgentService {
 
 	/** Get compressed context string for LLM injection */
 	getContextSummary(): string;
+	/** Query-aware variant used by the production injection path (task M2) — hybrid memory recall instead of the sync summary */
+	getContextSummaryAsync(): Promise<string>;
 }
 
 export const INeuralInverseAgentService = createDecorator<INeuralInverseAgentService>('neuralInverseAgentService');
@@ -302,6 +304,68 @@ class NeuralInverseAgentService extends Disposable implements INeuralInverseAgen
 
 		// Persistent memory (cross-session learned context)
 		const memorySummary = this._memoryService.getContextSummary(1500);
+		if (memorySummary) {
+			sections.push(`<persistent_memory>\n${memorySummary}\n</persistent_memory>`);
+		}
+
+		return sections.join('\n\n');
+	}
+
+	/**
+	 * Query-aware variant for the production injection path (task M2): the
+	 * persistent-memory section comes from hybrid recall (vector + lexical +
+	 * recency + frequency, each line with its match reasons) driven by the
+	 * active task goal and the most recent working-memory entries, instead of
+	 * the sync importance-ranked summary. Falls back to that summary whenever
+	 * recall yields nothing.
+	 */
+	async getContextSummaryAsync(): Promise<string> {
+		if (this._workingMemory.entries.length === 0) { return ''; }
+
+		const sections: string[] = [];
+
+		if (this._workingMemory.projectMap) {
+			sections.push(`<project_map>\n${this._workingMemory.projectMap}\n</project_map>`);
+		}
+
+		const recentEntries = this._workingMemory.entries
+			.slice(-30)
+			.map(e => `[${e.type}] ${e.summary}`)
+			.join('\n');
+		if (recentEntries) {
+			sections.push(`<agent_context>\n${recentEntries}\n</agent_context>`);
+		}
+
+		if (this._activeTask) {
+			const task = this._activeTask;
+			const progress = `Task: ${task.goal}\nComplexity: ${task.complexity} | Iteration: ${task.iteration}/${task.maxIterations}\nFiles read: ${task.filesRead.size} | Files modified: ${task.filesModified.size}\nTool calls: ${task.totalToolCalls} | Errors: ${task.totalErrors} | Replans: ${task.replans.length}`;
+			sections.push(`<agent_progress>\n${progress}\n</agent_progress>`);
+
+			if (task.subtasks.length > 0) {
+				const subtaskSummary = task.subtasks
+					.map(st => `[${st.status}] ${st.goal}`)
+					.join('\n');
+				sections.push(`<subtasks>\n${subtaskSummary}\n</subtasks>`);
+			}
+		}
+
+		const scratchpadSummary = this._scratchpadService.getCompressedSummary();
+		if (scratchpadSummary) {
+			sections.push(scratchpadSummary);
+		}
+
+		// Hybrid recall driven by what the agent is doing right now
+		const queryParts = [
+			this._activeTask?.goal ?? '',
+			...this._workingMemory.entries.slice(-5).map(e => e.summary),
+		].filter(p => p.length > 0);
+		let memorySummary = '';
+		try {
+			memorySummary = await this._memoryService.recallForPrompt(queryParts.join(' '), 1500, 8);
+		} catch { /* recall must never break the send */ }
+		if (!memorySummary) {
+			memorySummary = this._memoryService.getContextSummary(1500);
+		}
 		if (memorySummary) {
 			sections.push(`<persistent_memory>\n${memorySummary}\n</persistent_memory>`);
 		}
@@ -633,7 +697,7 @@ class NeuralInverseAgentService extends Disposable implements INeuralInverseAgen
 
 	private async _decomposeTaskAsync(task: AgentTask, goal: string): Promise<void> {
 		try {
-			const context = this.getContextSummary();
+			const context = await this.getContextSummaryAsync();
 			const result = await this._taskDecomposer.decompose(goal, context);
 			task.subtasks = result.subtasks;
 			task.complexity = result.complexity;

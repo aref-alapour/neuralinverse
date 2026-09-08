@@ -1,7 +1,6 @@
 /*--------------------------------------------------------------------------------------
- *  Copyright (c) NeuralInverse. All rights reserved.
- *  Embedding Service — optional API-based embeddings for semantic search.
- *  No-op when no embedding-capable provider is configured.
+ *  Copyright (c) Neural Inverse Corporation. All rights reserved.
+ *  Embedding Service — optional API-based embeddings for semantic search and agent memory.
  *--------------------------------------------------------------------------------------*/
 
 import { Disposable } from '../../../../../../base/common/lifecycle.js';
@@ -58,35 +57,33 @@ class EmbeddingService extends Disposable implements IEmbeddingService {
 	private _getEmbeddingProviderConfig(): { endpoint: string; apiKey: string; model: string } | null {
 		const settings = this._settingsService.state.settingsOfProvider;
 
-		// Provider configs: [settingsKey, baseUrl (or use endpoint field), embeddingModel]
+		// Provider configs: [settingsKey, baseUrl, embeddingModel]. Only
+		// providers that actually expose an OpenAI-compatible /v1/embeddings
+		// endpoint are auto-selected (task M2 item 3): picking a provider
+		// merely because a config object exists made _available true for
+		// chat-only setups whose embed calls then failed on every request.
+		// deepseek/groq/xAI/fireworksAI/cerebras/niFreeModels have no
+		// OpenAI-compatible embeddings endpoint; Vertex/Azure/Bedrock need
+		// their own clients — add those here when implemented.
 		const providers: Array<{ key: string; baseUrl?: string; model?: string }> = [
 			{ key: 'openAI', baseUrl: 'https://api.openai.com', model: 'text-embedding-3-small' },
-			{ key: 'deepseek', baseUrl: 'https://api.deepseek.com' },
-			{ key: 'groq', baseUrl: 'https://api.groq.com/openai' },
-			{ key: 'xAI', baseUrl: 'https://api.x.ai' },
 			{ key: 'mistral', baseUrl: 'https://api.mistral.ai', model: 'mistral-embed' },
-			{ key: 'fireworksAI', baseUrl: 'https://api.fireworks.ai/inference' },
-			{ key: 'cerebras', baseUrl: 'https://api.cerebras.ai' },
 			{ key: 'githubModels', baseUrl: 'https://models.inference.ai.azure.com', model: 'text-embedding-3-small' },
-			// Providers with custom endpoints
+			{ key: 'openRouter', baseUrl: 'https://openrouter.ai/api' },
+			// Providers with custom endpoints (OpenAI-compatible by design)
 			{ key: 'openAICompatible' },
-			{ key: 'ollama' },
+			{ key: 'ollama', model: 'nomic-embed-text' },
 			{ key: 'vLLM' },
 			{ key: 'lmStudio' },
 			{ key: 'liteLLM' },
-			{ key: 'openRouter', baseUrl: 'https://openrouter.ai/api' },
-			{ key: 'niFreeModels' },
-			{ key: 'googleVertex' },
-			{ key: 'microsoftAzure' },
-			{ key: 'awsBedrock' },
 		];
 
 		for (const p of providers) {
-			const s = (settings as any)[p.key];
-			if (!s) continue;
+			const s = (settings as Record<string, { endpoint?: string; apiKey?: string } | undefined>)[p.key];
+			if (!s) { continue; }
 
 			const base = (s.endpoint || p.baseUrl || '').replace(/\/+$/, '');
-			if (!base) continue;
+			if (!base) { continue; }
 
 			// Local providers (ollama, vLLM, lmStudio) don't require API keys
 			const apiKey = s.apiKey || '';
@@ -191,7 +188,7 @@ class EmbeddingService extends Disposable implements IEmbeddingService {
 
 	private async _getEmbeddingVector(content: string): Promise<Float32Array | null> {
 		const config = this._getEmbeddingProviderConfig();
-		if (!config) return null;
+		if (!config) { return null; }
 
 		try {
 			const truncated = content.slice(0, 8000);
@@ -202,10 +199,10 @@ class EmbeddingService extends Disposable implements IEmbeddingService {
 				headers,
 				body: JSON.stringify({ model: config.model, input: truncated, dimensions: this._dimensions }),
 			});
-			if (!res.ok) return null;
+			if (!res.ok) { return null; }
 			const json = await res.json();
 			const embedding = json?.data?.[0]?.embedding;
-			if (!Array.isArray(embedding)) return null;
+			if (!Array.isArray(embedding)) { return null; }
 			return new Float32Array(embedding);
 		} catch {
 			return null;

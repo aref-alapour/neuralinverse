@@ -1,14 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Neural Inverse Corporation. All rights reserved.
- *  Agent Memory Service — persistent cross-session memory for the NI agent.
- *
- *  Stores observations, learned patterns, and project-specific context that
- *  persists across IDE restarts. Scoped per workspace.
- *
- *  Recall is hybrid: semantic (cosine over entry embeddings, when an embedding
- *  provider has been registered) fused with lexical term match, recency, and
- *  access frequency. Without an embedding provider everything degrades
- *  gracefully to the original lexical scoring — never errors, never blocks.
+ *  Agent Memory Service — hybrid persistent memory (vector + lexical + recency + frequency).
  *---------------------------------------------------------------------------------------------*/
 
 import { Disposable } from '../../../../base/common/lifecycle.js';
@@ -61,6 +53,19 @@ export interface IAgentMemoryService {
 
 	/** Like recall(), but each result also carries why it matched (e.g. 'vector:0.82', 'term:pnpm', 'recent') */
 	recallWithReasons(query: string, maxResults?: number): Promise<IAgentMemoryRecallResult[]>;
+
+	/**
+	 * Query-aware context string for prompt injection (task M2): top-k recall
+	 * packed under a token budget, each line carrying its match reasons.
+	 * Empty string when the query is empty or nothing clears the score floor.
+	 */
+	recallForPrompt(query: string, maxTokens?: number, topK?: number): Promise<string>;
+
+	/**
+	 * Embed stored entries that lack vectors (task M2 backfill), in batches.
+	 * Returns how many entries got a vector. No-op without a provider.
+	 */
+	backfillEmbeddings(batchSize?: number): Promise<number>;
 
 	/** Keep a memory forever — pinned entries are never evicted */
 	pin(id: string): void;
@@ -196,7 +201,7 @@ export function selectEvictionCandidates(entries: IAgentMemoryEntry[], max: numb
 
 // ─── Implementation ──────────────────────────────────────────────────────────
 
-class AgentMemoryService extends Disposable implements IAgentMemoryService {
+export class AgentMemoryService extends Disposable implements IAgentMemoryService {
 	readonly _serviceBrand: undefined;
 
 	private _entries: Map<string, IAgentMemoryEntry> = new Map();
@@ -298,6 +303,46 @@ class AgentMemoryService extends Disposable implements IAgentMemoryService {
 		return results.map(({ entry, reasons }) => ({ entry, reasons }));
 	}
 
+	async recallForPrompt(query: string, maxTokens: number = 1500, topK: number = 8): Promise<string> {
+		const trimmedQuery = query.trim();
+		if (!trimmedQuery) { return ''; }
+		const results = await this.recallWithReasons(trimmedQuery, topK);
+		if (results.length === 0) { return ''; }
+
+		const lines: string[] = [];
+		let tokens = 0;
+		for (const { entry, reasons } of results) {
+			const suffix = reasons.length > 0 ? ` (matched: ${reasons.slice(0, 3).join(', ')})` : '';
+			const line = `[${entry.type}] ${entry.content}${suffix}`;
+			const lineTokens = Math.ceil(line.length / 4);
+			if (tokens + lineTokens > maxTokens) { break; }
+			lines.push(line);
+			tokens += lineTokens;
+		}
+
+		return lines.length > 0 ? `Agent Memory (${lines.length} entries):\n${lines.join('\n')}` : '';
+	}
+
+	async backfillEmbeddings(batchSize: number = 20): Promise<number> {
+		const provider = this._embeddingProvider;
+		if (!provider) { return 0; }
+		const pending = Array.from(this._entries.values()).filter(e => !e.embedding);
+		let embedded = 0;
+		for (let i = 0; i < pending.length; i += batchSize) {
+			for (const entry of pending.slice(i, i + batchSize)) {
+				try {
+					const vector = await provider(entry.content);
+					if (Array.isArray(vector) && vector.length > 0 && this._entries.get(entry.id) === entry) {
+						entry.embedding = vector;
+						embedded++;
+					}
+				} catch { /* leave the entry lexical */ }
+			}
+			if (embedded > 0) { this._schedulePersist(); }
+		}
+		return embedded;
+	}
+
 	pin(id: string): void {
 		const entry = this._entries.get(id);
 		if (!entry || entry.pinned) { return; }
@@ -314,7 +359,7 @@ class AgentMemoryService extends Disposable implements IAgentMemoryService {
 
 	reinforce(id: string): void {
 		const entry = this._entries.get(id);
-		if (!entry) return;
+		if (!entry) { return; }
 		entry.relevance = Math.min(1, entry.relevance + 0.15);
 		entry.lastAccessedAt = Date.now();
 		entry.accessCount++;
@@ -330,7 +375,7 @@ class AgentMemoryService extends Disposable implements IAgentMemoryService {
 	getByType(type: MemoryEntryType): IAgentMemoryEntry[] {
 		const results: IAgentMemoryEntry[] = [];
 		for (const entry of this._entries.values()) {
-			if (entry.type === type) results.push(entry);
+			if (entry.type === type) { results.push(entry); }
 		}
 		return results.sort((a, b) => b.relevance - a.relevance);
 	}
@@ -359,7 +404,7 @@ class AgentMemoryService extends Disposable implements IAgentMemoryService {
 			const suffix = reasons.length > 0 ? ` (matched: ${reasons[0]})` : '';
 			const line = `[${entry.type}] ${entry.content}${suffix}`;
 			const lineTokens = Math.ceil(line.length / 4);
-			if (tokens + lineTokens > maxTokens) break;
+			if (tokens + lineTokens > maxTokens) { break; }
 			lines.push(line);
 			tokens += lineTokens;
 		}
@@ -384,7 +429,7 @@ class AgentMemoryService extends Disposable implements IAgentMemoryService {
 			if (raw) {
 				const parsed: IAgentMemoryEntry[] = JSON.parse(raw);
 				for (const entry of parsed) {
-					if (!entry || typeof entry.id !== 'string') continue;
+					if (!entry || typeof entry.id !== 'string') { continue; }
 					if (!Array.isArray(entry.embedding)) { delete entry.embedding; } // tolerate legacy/corrupt vectors
 					this._entries.set(entry.id, entry);
 				}
@@ -397,7 +442,7 @@ class AgentMemoryService extends Disposable implements IAgentMemoryService {
 			clearTimeout(this._persistTimer);
 			this._persistTimer = undefined;
 		}
-		if (!this._dirty && this._entries.size === 0) return;
+		if (!this._dirty && this._entries.size === 0) { return; }
 		const arr = Array.from(this._entries.values());
 		this._storageService.store(STORAGE_KEY, JSON.stringify(arr), StorageScope.WORKSPACE, StorageTarget.MACHINE);
 		this._dirty = false;
@@ -414,7 +459,7 @@ class AgentMemoryService extends Disposable implements IAgentMemoryService {
 	}
 
 	private _evictIfNeeded(): void {
-		if (this._entries.size <= MAX_MEMORIES) return;
+		if (this._entries.size <= MAX_MEMORIES) { return; }
 		const all = Array.from(this._entries.values());
 		for (const victim of selectEvictionCandidates(all, MAX_MEMORIES, Date.now())) {
 			this._entries.delete(victim.id);

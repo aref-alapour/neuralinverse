@@ -30,8 +30,9 @@ class AgentMemoryEmbeddingContribution extends Disposable {
 
 		const withEmbeddings = memoryService as unknown as {
 			setEmbeddingProvider?: (fn: ((text: string) => Promise<number[] | null>) | null) => void;
+			backfillEmbeddings?: (batchSize?: number) => Promise<number>;
 		};
-		if (!withEmbeddings.setEmbeddingProvider) return; // older memory service — lexical only
+		if (!withEmbeddings.setEmbeddingProvider) { return; } // older memory service — lexical only
 
 		// Gate on the ledger flag, same as ledgerRecallContrib: embeddings fire
 		// real (paid) HTTP calls with the user's API key and persist ~1536-float
@@ -43,17 +44,26 @@ class AgentMemoryEmbeddingContribution extends Disposable {
 		try {
 			ledgerOn = !!settingsService.state.globalSettings.contextLedgerEnabled;
 		} catch { /* settings not ready — stay lexical */ }
-		if (!ledgerOn) return;
+		if (!ledgerOn) { return; }
 
 		withEmbeddings.setEmbeddingProvider(async (text: string): Promise<number[] | null> => {
 			try {
 				const vector = await embeddingService.embedToVector(text);
-				if (!vector) return null;
+				if (!vector) { return null; }
 				return Array.from(vector);
 			} catch {
 				return null; // degrade silently — lexical scoring stays active
 			}
 		});
+
+		// Backfill (task M2 item 2): entries stored before a provider existed
+		// have no vectors. Re-embed them once, in small batches, after a short
+		// idle delay so startup and the first chat turn are not contested.
+		// Fire-and-forget — failure just leaves those entries lexical.
+		const backfillTimer = setTimeout(() => {
+			withEmbeddings.backfillEmbeddings?.(20).catch(() => { /* best-effort */ });
+		}, 5_000);
+		void backfillTimer;
 	}
 }
 

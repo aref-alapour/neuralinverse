@@ -203,7 +203,7 @@ compaction ای که از نظر الگوریتم جلوتر است.
 |---|---|---|---|
 | M5 | 🟡 | `feat/context-ledger` | فازهای ۰-۳ و ۵ روی سورس کامل + تست standalone؛ پورت live-patch و تست owner مانده (بند ۱۳ تسک) |
 | M1 | 🟡 | درون M5 | journal = persistence؛ کلید conversationId در فاز ۵ بسته شد؛ تست owner مانده |
-| M2 | 🟡 | درون `feat/context-ledger` | بازیابی hybrid + pin + سقف ۲۰۰۰ پیاده شد؛ تست owner مانده |
+| M2 | 🟡 | درون `feat/context-ledger` | **موج ۳ (۰۹-۰۸):** recall روی مسیر تزریق وصل شد (کوئری از task+working memory) + backfill + provider معتبر؛ تست owner مانده |
 | M3 / M4 | 🔴 | — | روی زیرساخت M5 در session بعدی |
 | **A7** | 🔴 | — | **جدید ۰۹-۰۸** — سخت‌سازی پل چت بومی؛ پرلوریج‌ترین تسک بک‌لاگ |
 | **Q12** | 🟡 | `213acb1`, `a5ccefb` | usage روی desktop می‌رسد (هر دو مسیر chat + تست پاریتی در verify)؛ پورت live-patch + تست owner باز؛ ~۱۵ هشدار لینت سخت فایل باقی (Q11) |

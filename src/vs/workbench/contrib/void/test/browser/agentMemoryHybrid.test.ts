@@ -4,7 +4,9 @@
  *--------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import {
+	AgentMemoryService,
 	buildMatchReasons,
 	computeTermOverlap,
 	fuseScores,
@@ -46,6 +48,7 @@ const EPS = 1e-9;
 // ---------------------------------------------------------------------------
 
 suite('agentMemoryHybrid — scoreCosine', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('identical vectors score 1', () => {
 		assert.ok(Math.abs(scoreCosine([1, 0, 0], [1, 0, 0]) - 1) < EPS);
@@ -75,6 +78,7 @@ suite('agentMemoryHybrid — scoreCosine', () => {
 // ---------------------------------------------------------------------------
 
 suite('agentMemoryHybrid — fuseScores weights', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('hybrid mode: 0.5·cosine + 0.2·term + 0.2·recency + 0.1·frequency', () => {
 		assert.ok(Math.abs(fuseScores(factors({ cosine: 1, term: 1, recency: 1, frequency: 1 }), 'hybrid') - 1) < EPS);
@@ -118,6 +122,7 @@ suite('agentMemoryHybrid — fuseScores weights', () => {
 // ---------------------------------------------------------------------------
 
 suite('agentMemoryHybrid — computeTermOverlap', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('score is the matched fraction of query terms', () => {
 		const entryTerms = new Set(['always', 'use', 'pnpm', 'package', 'management']);
@@ -145,6 +150,7 @@ suite('agentMemoryHybrid — computeTermOverlap', () => {
 // ---------------------------------------------------------------------------
 
 suite('agentMemoryHybrid — buildMatchReasons', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('formats vector similarity to two decimals', () => {
 		assert.deepStrictEqual(
@@ -187,6 +193,7 @@ suite('agentMemoryHybrid — buildMatchReasons', () => {
 // ---------------------------------------------------------------------------
 
 suite('agentMemoryHybrid — fused importance & eviction', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('fusedImportance decays relevance with recency and rewards access', () => {
 		const fresh = fusedImportance(makeEntry({ relevance: 0.5, lastAccessedAt: NOW }), NOW);
@@ -221,5 +228,63 @@ suite('agentMemoryHybrid — fused importance & eviction', () => {
 		const input = [a, b];
 		assert.deepStrictEqual(selectEvictionCandidates(input, 5, NOW), []);
 		assert.deepStrictEqual(input, [a, b]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Suite: recallForPrompt / backfillEmbeddings — the M2 injection-path wiring
+// ---------------------------------------------------------------------------
+
+suite('agentMemoryService — recallForPrompt + backfill (M2)', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	const makeService = () => {
+		const stored: Record<string, string> = {};
+		const storage = {
+			get: (key: string) => stored[key],
+			store: (key: string, value: string) => { stored[key] = value; },
+			onWillSaveState: () => ({ dispose: () => { } }),
+		};
+		const service = new AgentMemoryService(storage as never);
+		return { service, stored };
+	};
+
+	test('recallForPrompt returns query-relevant memories with match reasons', async () => {
+		const { service } = makeService();
+		service.remember('preference', 'always use pnpm for package management');
+		service.remember('project-fact', 'the deploy pipeline runs on fridays');
+		const out = await service.recallForPrompt('package manager', 1500, 8);
+		assert.ok(out.includes('pnpm'), 'the pnpm memory must be recalled');
+		assert.ok(out.includes('(matched:'), 'each line carries its match reasons');
+		// A fresh but irrelevant entry can still clear the low score floor
+		// (recency + relevance by design) — what recall guarantees is RANKING.
+		assert.ok(out.indexOf('pnpm') < out.indexOf('fridays'), 'the relevant memory ranks first');
+	});
+
+	test('recallForPrompt with an empty query returns an empty string', async () => {
+		const { service } = makeService();
+		service.remember('preference', 'something');
+		assert.strictEqual(await service.recallForPrompt('   '), '');
+	});
+
+	test('recallForPrompt respects the token budget', async () => {
+		const { service } = makeService();
+		service.remember('preference', 'pnpm ' + 'x'.repeat(4000));
+		const out = await service.recallForPrompt('pnpm', 10, 8);
+		assert.strictEqual(out, '', 'a single over-budget line does not fit');
+	});
+
+	test('backfillEmbeddings is a no-op without a provider, embeds everything with one', async () => {
+		const { service, stored } = makeService();
+		service.remember('preference', 'alpha');
+		service.remember('preference', 'beta');
+		assert.strictEqual(await service.backfillEmbeddings(), 0);
+		assert.ok(!stored['ni.agent.memory'], 'nothing persisted without a provider');
+
+		service.setEmbeddingProvider(async () => [0.1, 0.2, 0.3]);
+		assert.strictEqual(await service.backfillEmbeddings(1), 2);
+		service.dispose(); // flush the debounced persist
+		const persisted = JSON.parse(stored['ni.agent.memory']) as Array<{ content: string; embedding?: number[] }>;
+		assert.strictEqual(persisted.filter(e => Array.isArray(e.embedding)).length, 2, 'both entries got vectors');
 	});
 });

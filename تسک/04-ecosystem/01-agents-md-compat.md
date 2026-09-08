@@ -14,7 +14,9 @@
 >   ماژول جدید `void/common/workspaceRuleFiles.ts` — سایدبار، Power Mode و
 >   workflow دیگر نمی‌توانند از هم دریفت کنند. موتور جمع‌آوری هسته
 >   (`ComputeAutomaticInstructions`) متعلق به چت بومی می‌ماند و دست نخورد.
-> - **سایدبار + پل چت بومی** (هر دو از `convertToLLMMessageService`): reader از
+> - **سایدبار** (از `prepareLLMChatMessages`) و **پل چت بومی** (از
+>   `getWorkspaceRuleFiles()` جدید — این گپ موقع M2 دیده و بسته شد؛
+>   `generateSystemMessage` به‌تنهایی aiInstructions نمی‌ساخت): reader از
 >   `.neuralinverserules` به هر سه فایل گسترش شد (برچسب GUIDELINES به‌روز شد).
 > - **Workflow**: `agentExecutor` حالا rule ها را از `ctx.fileService` +
 >   `workspaceUri` می‌خواند و «Workspace Rules» به system prompt اضافه می‌کند.

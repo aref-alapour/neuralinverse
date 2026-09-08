@@ -660,6 +660,8 @@ export interface IConvertToLLMMessageService {
 	prepareLLMChatMessages: (opts: { chatMessages: ChatMessage[]; chatMode: ChatMode; modelSelection: ModelSelection | null }) => Promise<{ messages: LLMChatMessage[]; separateSystemMessage: string | undefined }>;
 	prepareFIMMessage(opts: { messages: LLMFIMMessage }): { prefix: string; suffix: string; stopTokens: string[] };
 	generateSystemMessage(chatMode: ChatMode, specialToolFormat: 'openai-style' | 'anthropic-style' | 'gemini-style' | undefined, allowedToolNames?: string[], providerName_?: string, modelName_?: string): Promise<string>;
+	/** Formatted workspace rule files (AGENTS.md / CLAUDE.md / .neuralinverserules — task E1) for callers that build their own system message (the native chat bridge). */
+	getWorkspaceRuleFiles(): string;
 }
 
 export const IConvertToLLMMessageService = createDecorator<IConvertToLLMMessageService>('ConvertToLLMMessageService');
@@ -860,8 +862,16 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 		}
 	}
 
-	// Get combined AI instructions from settings and workspace rule files
-	private _getCombinedAIInstructions(): string {
+	/** Formatted workspace rule files (task E1) — see getWorkspaceRuleFiles(). */
+	getWorkspaceRuleFiles(): string {
+		return this._getWorkspaceRuleFileContents();
+	}
+
+	// Get combined AI instructions from settings and workspace rule files.
+	// The agent-context section is passed in because the production chat path
+	// computes it asynchronously (hybrid memory recall, task M2) while the
+	// FIM/simple paths keep the sync summary.
+	private _getCombinedAIInstructions(agentContext: string): string {
 		const globalAIInstructions = this.voidSettingsService.state.globalSettings.aiInstructions;
 		const workspaceRuleFileContent = this._getWorkspaceRuleFileContents();
 
@@ -874,11 +884,15 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 		const modernisationContext = this._buildModernisationContext();
 		if (modernisationContext) { ans.push(modernisationContext); }
 
-		// Inject NeuralInverse Agent working memory context when a task is active
-		const agentContext = this._getAgentService()?.getContextSummary();
 		if (agentContext) { ans.push(agentContext); }
 
 		return ans.join('\n\n');
+	}
+
+	/** Chat path variant: the agent context comes from query-aware hybrid memory recall (task M2). */
+	private async _getCombinedAIInstructionsForChat(): Promise<string> {
+		const agentContext = await this._getAgentService()?.getContextSummaryAsync() ?? '';
+		return this._getCombinedAIInstructions(agentContext);
 	}
 
 
@@ -979,7 +993,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 		const modelSelectionOptions = this.voidSettingsService.state.optionsOfModelSelection[featureName][modelSelection.providerName]?.[modelSelection.modelName];
 
 		// Get combined AI instructions
-		const aiInstructions = this._getCombinedAIInstructions();
+		const aiInstructions = this._getCombinedAIInstructions(this._getAgentService()?.getContextSummary() ?? '');
 
 		const isReasoningEnabled = getIsReasoningEnabledState(featureName, providerName, modelName, modelSelectionOptions, overridesOfModel);
 		const reservedOutputTokenSpace = getReservedOutputTokenSpace(providerName, modelName, { isReasoningEnabled, overridesOfModel });
@@ -1017,7 +1031,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 		const modelSelectionOptions = this.voidSettingsService.state.optionsOfModelSelection['Chat'][modelSelection.providerName]?.[modelSelection.modelName];
 
 		// Get combined AI instructions
-		const aiInstructions = this._getCombinedAIInstructions();
+		const aiInstructions = await this._getCombinedAIInstructionsForChat();
 		const isReasoningEnabled = getIsReasoningEnabledState('Chat', providerName, modelName, modelSelectionOptions, overridesOfModel);
 		const reservedOutputTokenSpace = getReservedOutputTokenSpace(providerName, modelName, { isReasoningEnabled, overridesOfModel });
 		const llmMessages = this._chatMessagesToSimpleMessages(chatMessages);
@@ -1042,7 +1056,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 
 	prepareFIMMessage: IConvertToLLMMessageService['prepareFIMMessage'] = ({ messages }) => {
 		// Get combined AI instructions with the provided aiInstructions as the base
-		const combinedInstructions = this._getCombinedAIInstructions();
+		const combinedInstructions = this._getCombinedAIInstructions(this._getAgentService()?.getContextSummary() ?? '');
 
 		const prefix = `\
 ${!combinedInstructions ? '' : `\

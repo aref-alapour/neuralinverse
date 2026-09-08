@@ -561,6 +561,14 @@ class VoidChatAgentImpl implements IChatAgentImplementation {
 		const { providerName: pn, modelName: mn } = modelSelection;
 		let systemMessage = await this._convertService.generateSystemMessage('agent', undefined, undefined, pn, mn);
 
+		// Workspace rule files (task E1): generateSystemMessage does not carry
+		// them (they enter the sidebar path through prepareLLMChatMessages), so
+		// the bridge appends the same formatted block itself.
+		const workspaceRules = this._convertService.getWorkspaceRuleFiles();
+		if (workspaceRules) {
+			systemMessage = `${systemMessage}\n\n<workspace_rules>\n${workspaceRules}\n</workspace_rules>`;
+		}
+
 		// Append Copilot mode instructions (custom instructions from .github/copilot-instructions.md
 		// or a custom Chat mode) so user-configured personas carry through to the NI backend.
 		const modeInstructions = request.modeInstructions?.content;
