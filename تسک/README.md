@@ -69,7 +69,7 @@
 | Memories (خودکار + معنایی) | ⚠️ حافظه‌ی واژگانی، ثبت فقط پایان task | [M2](01-memory/02-vector-retrieval.md) + [M3](01-memory/03-auto-capture-consolidation-ui.md) | P0→P1 |
 | ادامه‌ی گفتگو / resume thread | ❌ حافظه در RAM می‌میرد | [M1](01-memory/01-conversation-persistence.md) | **P0** |
 | @Docs (ایندکس مستندات) | ❌ | [M4](01-memory/04-docs-knowledge-base.md) | P2 |
-| Context: نوار مصرف + شفافیت | ⭐ ویجت upstream آماده و تست‌شده؛ فقط تغذیه نمی‌شود | [C2](02-context/02-context-gauge-ui.md) | **P0** |
+| Context: نوار مصرف + شفافیت | 🟡 ویجت بومی از موج ۲ تغذیه می‌شود؛ gauge سایدبار موج ۳ ساخته شد (تست owner باز) | [C2](02-context/02-context-gauge-ui.md) | **P0** |
 | @-mentions (@file/@symbol/@web) | ❌ (فقط stage انتخاب) | [C3](02-context/03-at-mentions.md) | P1 |
 | فایل‌های Pinned + Notepads | ❌ | [C4](02-context/04-pinned-context.md) | P1 |
 | درک Codebase (semantic retrieval) | ⚠️ موتور هست، نیمه‌وصل | [C1](02-context/01-wire-context-engine.md) + [C6](02-context/06-smart-auto-context.md) | P0→P1 |

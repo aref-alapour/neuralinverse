@@ -117,6 +117,9 @@ export const indentationFilter = Object.freeze<string[]>([
 	'!test/automation/out/**',
 	'!test/monaco/out/**',
 	'!test/smoke/out/**',
+	// minified build artifacts committed per repo convention (eslint already
+	// ignores them via **/out/**; the whitespace rule has no meaning there)
+	'!src/vs/workbench/contrib/void/browser/react/out/**',
 	'!extensions/terminal-suggest/src/shell/zshBuiltinsCache.ts',
 	'!extensions/terminal-suggest/src/shell/fishBuiltinsCache.ts',
 	'!extensions/terminal-suggest/src/completions/upstream/**',
