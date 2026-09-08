@@ -1,14 +1,36 @@
 # A4 — سیستم مجوز یکپارچه + پیش‌نمایش (Unified Permissions)
 
-- **اولویت:** P1 | **برآورد:** M | **وضعیت:** 🔴 | **وابستگی:** —
+- **اولویت:** P1 | **برآورد:** ~~M~~ → **S/M** | **وضعیت:** 🔴 | **وابستگی:** [A7](07-native-chat-bridge.md) ✅ بسته
 - **هم‌ارز در Cursor:** سطح‌های auto-run (خواندن/نوشتن/ترمینال) با یک UX واحد
 
-## هدف
-الان سه مدل مجوز موازی داریم: chat سه‌سطحی (`edits/terminal/MCP` + autoApprobe)،
-autonomy service با tier های `auto/notify/confirm` از `.neuralinverseagent`، و
-workflow engine با approval gate های per-step — ولی executor خودِ NI برای `runCommand`
-فقط یک blocklist Regex دارد! هدف: یک `IPermissionService` واحد که همه‌ی stack ها
-از آن بپرسند.
+> ## ⚠️ بازنویسی دامنه ۲۰۲۶-۰۹-۰۸ — نصف این تسک قبلاً انجام شد
+>
+> صورت‌مسئله‌ی قدیمی («سه مدل مجوز موازی») دیگر درست نیست. تصویر واقعی بعد از
+> موج‌های ۱ و ۲:
+>
+> | مسیر | مجوز امروز | وضعیت |
+> |---|---|---|
+> | سایدبار Void | `approvalTypeOfBuiltinToolName` + `autoApprove` (`chatThreadService.ts:1018`) | مرجع فعلی |
+> | **پل چت بومی** | ✅ **همان map و همان تنظیم** (`f332502e5dc`) | **یکی شد** |
+> | Power Mode | `askPermission` جدا (`powerModeProcessor.ts:58`، caller در `:366`) | 🔴 جدا |
+> | workflow executor | فقط blocklist رجکسی (`neuralInverse/browser/tools/terminalTools.ts:68` — `BLOCKED_PATTERNS`) | 🔴 ضعیف‌ترین |
+> | هسته‌ی VS Code | `languageModelToolsConfirmationService` | مرجع بالقوه |
+>
+> پس **دو مسیر اصلی از قبل یکی شده‌اند** و کار باقی‌مانده دو چیز است، نه ساختن
+> `IPermissionService` از صفر.
+>
+> ⚠️ ضعیف‌ترین حلقه را دست‌کم نگیر: executor برای `run_command` **هیچ تأییدی**
+> نمی‌گیرد و فقط یک blocklist رجکسی دارد. blocklist سیاست امنیتی نیست — هر
+> دستوری که الگو را نخورد بی‌پرسش اجرا می‌شود.
+
+## هدف (بازنویسی‌شده)
+
+**۱. تصمیم مرجع.** نقشه‌ی خودمان (`approvalTypeOfBuiltinToolName`) مرجع بماند،
+یا به `languageModelToolsConfirmationService` هسته مهاجرت کنیم؟ توصیه: نقشه‌ی
+خودمان بماند چون BYOLLM و ابزارهای void را می‌شناسد، ولی **مرزِ اجرا** یکی شود.
+این تصمیم قبل از کد نوشته و ثبت شود.
+
+**۲. آوردن دو مسیر باقی‌مانده به همان مرز:** Power Mode و workflow executor.
 
 ## وضعیت فعلی در کد
 - `void/common/toolsServiceTypes.ts:21` — `approvalTypeOfBuiltinToolName` + دسته‌های
