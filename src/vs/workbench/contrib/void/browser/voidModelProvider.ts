@@ -37,7 +37,7 @@ import {
 } from '../../chat/common/participants/chatAgents.js';
 import { ConfirmedReason, IChatProgress, IChatToolInvocation, ToolConfirmKind } from '../../chat/common/chatService/chatService.js';
 import { ChatAgentLocation, ChatModeKind } from '../../chat/common/constants.js';
-import { LLMChatMessage, OpenAILLMChatMessage, RawToolCallObj } from '../common/sendLLMMessageTypes.js';
+import { LLMChatMessage, LLMUsage, OpenAILLMChatMessage, RawToolCallObj } from '../common/sendLLMMessageTypes.js';
 import { ILanguageModelToolsService, IToolData, ToolDataSource } from '../../chat/common/tools/languageModelToolsService.js';
 import { ChatToolInvocation } from '../../chat/common/model/chatProgressTypes/chatToolInvocation.js';
 import { waitForState } from '../../../../base/common/observable.js';
@@ -51,6 +51,9 @@ import { extractXMLToolsWrapper } from '../common/llmMessage/extractGrammar.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { InternalToolInfo, isABuiltinToolName } from '../common/prompt/prompts.js';
 import { approvalTypeOfBuiltinToolName, BuiltinToolName } from '../common/toolsServiceTypes.js';
+import { IContextLedgerService } from './contextLedgerService.js';
+import { ILedgerAppendInput } from '../common/ledgerTypes.js';
+import { chatSessionResourceToId } from '../../chat/common/model/chatUri.js';
 
 const NI_EXTENSION_ID = new ExtensionIdentifier('neuralInverse.void');
 const NI_AGENT_ID = 'neuralInverse.default';
@@ -476,7 +479,20 @@ class VoidChatAgentImpl implements IChatAgentImplementation {
 		private readonly _lmToolsService: ILanguageModelToolsService,
 		private readonly _toolsService: IToolsService,
 		private readonly _convertService: IConvertToLLMMessageService,
+		private readonly _contextLedgerService: IContextLedgerService,
 	) { }
+
+	/**
+	 * Best-effort journal write for the native chat (task A7 item 3). The sidebar
+	 * journals every message through chatThreadService; requests arriving here
+	 * were invisible to the ledger, so this surface had no archive, no
+	 * compaction and nothing for `recall_history` to find. Failures are
+	 * swallowed on purpose: a ledger problem must never break a chat turn.
+	 */
+	private _journal(threadId: string, input: ILedgerAppendInput): void {
+		if (!this._settingsService.state.globalSettings.contextLedgerEnabled) { return; }
+		void this._contextLedgerService.append(threadId, input).catch(() => undefined);
+	}
 
 	async invoke(request: IChatAgentRequest, progress: (parts: IChatProgress[]) => void, history: IChatAgentHistoryEntry[], token: CancellationToken): Promise<IChatAgentResult> {
 		const state = this._settingsService.state;
@@ -522,6 +538,10 @@ class VoidChatAgentImpl implements IChatAgentImplementation {
 		// Do NOT pass a systemMessage here — chatMode:'agent' in sendLLMMessage triggers void's
 		// pipeline to build the full system message (workspace context + all tool schemas).
 		// Passing an empty string would create an empty Anthropic system block (API error).
+		// One ledger thread per chat session, so a resumed session keeps its archive.
+		const ledgerThreadId = chatSessionResourceToId(request.sessionResource);
+		this._journal(ledgerThreadId, { role: 'user', content: userMessage });
+
 		const llmMessages: OpenAILLMChatMessage[] = [];
 		for (const turn of history) {
 			llmMessages.push({ role: 'user', content: turn.request.message });
@@ -555,14 +575,37 @@ class VoidChatAgentImpl implements IChatAgentImplementation {
 			if (token.isCancellationRequested) { break; }
 			iterations++;
 
-			const { text, toolCalls } = await this._callLLM(
+			const { text, toolCalls, usage } = await this._callLLM(
 				loopMessages, modelSelection, state, copilotMcpTools, systemMessage, token
 			);
 
 			if (token.isCancellationRequested) { break; }
 
+			// Feed the native context gauge (task A7 item 4). It reads
+			// `response.usage`, which the chat model sets from this progress part.
+			// Reported per iteration, not once at the end: `promptTokens` is how
+			// full the window is right now, and an agent turn can call the model
+			// many times, so the last one is the number the user needs to see.
+			// The core accumulates `completionTokens` across the turn itself.
+			if (usage) {
+				progress([{
+					kind: 'usage',
+					promptTokens: usage.input,
+					completionTokens: usage.output,
+					actualModelId: `ni:${modelSelection.providerName}:${modelSelection.modelName}`,
+				}]);
+			}
+
 			if (text.length > 0) {
 				progress([{ kind: 'markdownContent', content: new MarkdownString(text) }]);
+				this._journal(ledgerThreadId, {
+					role: 'assistant',
+					content: text,
+					meta: {
+						model: `${modelSelection.providerName}/${modelSelection.modelName}`,
+						...(usage ? { usage: { input: usage.input, output: usage.output } } : {}),
+					},
+				});
 			}
 
 			if (!toolCalls || toolCalls.length === 0) { break; }
@@ -802,6 +845,12 @@ class VoidChatAgentImpl implements IChatAgentImplementation {
 					await invocation.didExecuteTool({ content: [{ kind: 'text', value: toolResultText }], toolResultError: true });
 				}
 
+				this._journal(ledgerThreadId, {
+					role: 'tool',
+					content: toolResultText,
+					name: toolName,
+					meta: { toolCallId },
+				});
 				// Feed result back as a tool message
 				loopMessages.push({ role: 'user', content: `<tool_result name="${toolName}" id="${toolCallId}">\n${toolResultText}\n</tool_result>` });
 			}
@@ -817,13 +866,13 @@ class VoidChatAgentImpl implements IChatAgentImplementation {
 		mcpTools: InternalToolInfo[],
 		systemMessage: string,
 		token: CancellationToken,
-	): Promise<{ text: string; toolCalls: RawToolCallObj[] | undefined }> {
+	): Promise<{ text: string; toolCalls: RawToolCallObj[] | undefined; usage: LLMUsage | undefined }> {
 		return new Promise((resolve, reject) => {
 			const abortRef = { current: null as (() => void) | null };
 			const cancellationListener = token.onCancellationRequested(() => {
 				abortRef.current?.();
 				cancellationListener.dispose();
-				resolve({ text: '', toolCalls: undefined });
+				resolve({ text: '', toolCalls: undefined, usage: undefined });
 			});
 
 			// System message is pre-built in the renderer; chatMode:null skips redundant main-process
@@ -831,9 +880,9 @@ class VoidChatAgentImpl implements IChatAgentImplementation {
 			// (read_file, update_agent_status, etc.) never appears raw in the chat display.
 			const { newOnText, newOnFinalMessage } = extractXMLToolsWrapper(
 				() => { },
-				({ fullText, toolCalls }) => {
+				({ fullText, toolCalls, usage }) => {
 					cancellationListener.dispose();
-					resolve({ text: fullText, toolCalls });
+					resolve({ text: fullText, toolCalls, usage });
 				},
 				'agent',
 				mcpTools.length > 0 ? mcpTools : undefined,
@@ -858,7 +907,7 @@ class VoidChatAgentImpl implements IChatAgentImplementation {
 				},
 				onAbort: () => {
 					cancellationListener.dispose();
-					resolve({ text: '', toolCalls: undefined });
+					resolve({ text: '', toolCalls: undefined, usage: undefined });
 				},
 			});
 			if (requestId) {
@@ -888,6 +937,7 @@ class VoidModelProvider extends Disposable implements IWorkbenchContribution, IL
 		@ILanguageModelToolsService private readonly _lmToolsService: ILanguageModelToolsService,
 		@IToolsService private readonly _toolsService: IToolsService,
 		@IConvertToLLMMessageService private readonly _convertService: IConvertToLLMMessageService,
+		@IContextLedgerService private readonly _contextLedgerService: IContextLedgerService,
 	) {
 		super();
 
@@ -919,7 +969,7 @@ class VoidModelProvider extends Disposable implements IWorkbenchContribution, IL
 		// Register default chat agent once — it stays for the session
 		if (!this._agentRegistered) {
 			this._agentRegistered = true;
-			const agentImpl = new VoidChatAgentImpl(this._settingsService, this._llmMessageService, this._lmToolsService, this._toolsService, this._convertService);
+			const agentImpl = new VoidChatAgentImpl(this._settingsService, this._llmMessageService, this._lmToolsService, this._toolsService, this._convertService, this._contextLedgerService);
 			const ds = new DisposableStore();
 
 			ds.add(this._chatAgentService.registerAgent(NI_AGENT_ID, {
