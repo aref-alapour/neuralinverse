@@ -81,7 +81,7 @@
 | سطح‌های auto-run / مجوز واحد | ⚠️ چهار مدل پراکنده؛ upstream مرجع آماده دارد | [A4](03-agent-parity/04-unified-permissions.md) | P1 |
 | Plan mode | 🟡 **تله بسته شد (۰۹-۰۸):** گارد در مرز `callTool` نوشتن/اجرای ۱۸ ابزار را در plan رد می‌کند؛ پورت live-patch، تست owner و قدم‌های بعدی A5 باز | [A5](03-agent-parity/05-plan-mode.md) | **P1** |
 | Composer (planner/worker) | ⚠️ sub-agent زنده، ولی ماژول composer ثبت نشده | [A6](03-agent-parity/06-multi-agent-composer.md) | P2 |
-| Rules (استاندارد صنعت) | ⭐ upstream کامل دارد (AGENTS.md/CLAUDE.md)، ما وصل نیستیم | [E1](04-ecosystem/01-agents-md-compat.md) | **P0** |
+| Rules (استاندارد صنعت) | 🟡 **موج ۳ (۰۹-۰۸):** سه مسیر وصل شد (AGENTS/CLAUDE/.neuralinverserules)؛ تست owner و تأیید precedence باز | [E1](04-ecosystem/01-agents-md-compat.md) | **P0** |
 | Skills / Hooks | ⭐ upstream هر دو را دارد (`.claude/skills` + hookCompatibility) | [E2](04-ecosystem/02-skills-and-hooks.md) | P2 |
 | اجرای CLI/CI (مثل `claude -p`) | ❌ | [E3](04-ecosystem/03-cli-headless.md) | P2 |
 | Usage / هزینه | 🟡 `usage` روی desktop می‌رسد (۰۹-۰۸: هر دو مسیر chat + تست پاریتی)؛ تست owner روی نسخه‌ی نصبی باز | [Q1](05-quality/01-cost-usage-tracking.md) + [Q12](05-quality/12-desktop-usage-parity.md) | **P0** |

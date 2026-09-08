@@ -36,7 +36,11 @@
     "src/vs/workbench/contrib/neuralInverseFirmware/browser/engine/projectConfig/checkpointSnapshot.ts",
     "src/vs/workbench/contrib/neuralInverseFirmware/browser/engine/projectConfig/checkpointService.ts",
     "src/vs/workbench/contrib/neuralInverseFirmware/test/browser/engine/projectConfig/checkpointSnapshot.test.ts",
-    "src/vs/workbench/contrib/void/browser/checkpointRestoreActions.ts"
+    "src/vs/workbench/contrib/void/browser/checkpointRestoreActions.ts",
+    "src/vs/workbench/contrib/void/common/workspaceRuleFiles.ts",
+    "src/vs/workbench/contrib/void/browser/convertToLLMMessageService.ts",
+    "src/vs/workbench/contrib/powerMode/browser/session/powerModeContextBuilder.ts",
+    "src/vs/workbench/contrib/void/test/node/workspaceRuleFiles.test.ts"
   ],
   "tests": [
     "src/vs/workbench/contrib/void/test/node/ledgerBoundary.test.ts",
@@ -46,7 +50,8 @@
     "src/vs/workbench/contrib/void/test/node/ossRetryGuard.test.ts",
     "src/vs/workbench/contrib/void/test/node/streamIntegrity.test.ts",
     "src/vs/workbench/contrib/void/test/node/sendLLMMessageParity.test.ts",
-    "src/vs/workbench/contrib/neuralInverseFirmware/test/browser/engine/projectConfig/checkpointSnapshot.test.ts"
+    "src/vs/workbench/contrib/neuralInverseFirmware/test/browser/engine/projectConfig/checkpointSnapshot.test.ts",
+    "src/vs/workbench/contrib/void/test/node/workspaceRuleFiles.test.ts"
   ],
   "featureFiles": [
     "src/vs/workbench/contrib/void/common/ledgerTypes.ts",
