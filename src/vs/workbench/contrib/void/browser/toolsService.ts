@@ -47,6 +47,70 @@ type ValidateBuiltinParams = { [T in BuiltinToolName]: (p: RawToolParamsObj) => 
 type CallBuiltinTool = { [T in BuiltinToolName]: (p: BuiltinToolCallParams[T]) => Promise<{ result: BuiltinToolResultType[T] | Promise<BuiltinToolResultType[T]>, interruptTool?: () => void }> }
 type BuiltinToolResultToString = { [T in BuiltinToolName]: (p: BuiltinToolCallParams[T], result: Awaited<BuiltinToolResultType[T]>) => string }
 
+// Plan-mode containment (task A5, step 1): `plan_mode_enter`/`plan_mode_exit`
+// set a per-thread flag that nothing ever read — the user turned Plan on and
+// writes still went through. These are the tools that mutate the workspace,
+// execute commands, or delegate to agents that can write outside this
+// boundary; while a thread is in plan mode they are rejected at the callTool
+// boundary (see `withPlanModeGuard`). Keep this list in sync with new writing
+// tools — when in doubt, block: a plan mode that fails open is worse than no
+// plan mode at all. `read_terminal`, `todo_write`, `memory_write` and
+// `tasks_*` stay allowed: they only touch app/conversation state, not the
+// workspace.
+const planModeBlockedTools = new Set<BuiltinToolName>([
+	// file writes / edits / fs mutations
+	'write',
+	'edit',
+	'rewrite_file',
+	'edit_file',
+	'multi_replace_file_content',
+	'create_file_or_folder',
+	'delete_file_or_folder',
+	'generate_document',
+	// terminal / command execution
+	'bash',
+	'run_command',
+	'run_background_command',
+	'run_persistent_command',
+	'open_persistent_terminal',
+	'send_command_input',
+	'kill_persistent_terminal',
+	// agents with their own tool access (spawn_agent grants write/edit/bash)
+	'spawn_agent',
+	'query_ni_agent',
+])
+
+const planModeBlockedToolMessage = (toolName: string): string =>
+	`Plan mode is active for this conversation, so "${toolName}" was blocked without running. Plan mode is read-only: explore with read/search tools and present your plan, then call plan_mode_exit to restore write access before editing files or running commands.`
+
+// Minimal structural shape of one callTool entry — the guard only forwards
+// the call, and the generic preserves each tool's own param/result types.
+type PlanModeGuardedToolFn = (params: never) => Promise<{ result: unknown, interruptTool?: () => void }>
+
+/**
+ * Wraps every entry of a callTool map with the plan-mode guard: when
+ * `isPlanMode()` is true and the tool is in `planModeBlockedTools`, the call
+ * rejects with a clear error for the model instead of executing. Both the
+ * chat sidebar and the native chat bridge invoke builtin tools through this
+ * map, which makes it the single enforcement boundary for plan mode.
+ */
+export const withPlanModeGuard = <T extends Record<string, PlanModeGuardedToolFn>>(
+	tools: T,
+	isPlanMode: () => boolean,
+): T => {
+	const guarded: Record<string, PlanModeGuardedToolFn> = {}
+	for (const toolName of Object.keys(tools)) {
+		const impl = tools[toolName]
+		guarded[toolName] = async (params: never) => {
+			if (planModeBlockedTools.has(toolName as BuiltinToolName) && isPlanMode()) {
+				throw new Error(planModeBlockedToolMessage(toolName))
+			}
+			return impl(params)
+		}
+	}
+	return guarded as T
+}
+
 
 const isFalsy = (u: unknown) => {
 	return !u || u === 'null' || u === 'undefined'
@@ -653,7 +717,7 @@ export class ToolsService extends Disposable implements IToolsService {
 		}
 
 
-		this.callTool = {
+		const builtinCallTool: CallBuiltinTool = {
 			// --- Power Mode style tools ---
 			bash: async ({ command, description, timeout }) => {
 				const jobId = `void_bash_${Date.now()}`
@@ -1667,6 +1731,15 @@ export class ToolsService extends Disposable implements IToolsService {
 				}
 			},
 		}
+
+		// Plan-mode containment (task A5, step 1): the guard is the single
+		// boundary every builtin tool call passes through (the chat sidebar's
+		// `_runToolCall` and the native chat bridge both invoke
+		// `toolsService.callTool[toolName](...)`). It reads the same per-thread
+		// flag that `plan_mode_enter`/`plan_mode_exit` maintain via
+		// `_currentThreadId`, so blocked tools reject with an explanation for
+		// the model until the thread leaves plan mode.
+		this.callTool = withPlanModeGuard(builtinCallTool, () => this._planModeByThread.get(this._currentThreadId) ?? false)
 
 
 		const nextPageStr = (hasNextPage: boolean) => hasNextPage ? '\n\n(more on next page...)' : ''
