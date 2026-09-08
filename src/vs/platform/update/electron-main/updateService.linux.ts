@@ -14,7 +14,7 @@ import { IProductService } from '../../product/common/productService.js';
 import { asJson, IRequestService } from '../../request/common/request.js';
 import { IApplicationStorageMainService } from '../../storage/electron-main/storageMainService.js';
 import { ITelemetryService } from '../../telemetry/common/telemetry.js';
-import { AvailableForDownload, IUpdate, State, UpdateType } from '../common/update.js';
+import { AvailableForDownload, isNewerProductVersion, IUpdate, State, UpdateType } from '../common/update.js';
 import { AbstractUpdateService, createUpdateURL, IUpdateURLOptions } from './abstractUpdateService.js';
 
 export class LinuxUpdateService extends AbstractUpdateService {
@@ -51,7 +51,10 @@ export class LinuxUpdateService extends AbstractUpdateService {
 		this.requestService.request({ url, callSite: 'updateService.linux.checkForUpdates' }, CancellationToken.None)
 			.then<IUpdate | null>(asJson)
 			.then(update => {
-				if (!update || !update.url || !update.version || !update.productVersion) {
+				if (!update || !update.url || !update.version || !update.productVersion
+					// The feed answers with its latest release whatever we ask about, so
+					// anything not strictly newer would downgrade the installed build.
+					|| !isNewerProductVersion(update.productVersion, this.productService.version)) {
 					this.setState(State.Idle(UpdateType.Archive, undefined, explicit || undefined));
 				} else {
 					this.setState(State.AvailableForDownload(update));

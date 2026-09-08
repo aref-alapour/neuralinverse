@@ -32,7 +32,7 @@ import { IProductService } from '../../product/common/productService.js';
 import { asJson, IRequestService } from '../../request/common/request.js';
 import { IApplicationStorageMainService } from '../../storage/electron-main/storageMainService.js';
 import { ITelemetryService } from '../../telemetry/common/telemetry.js';
-import { AvailableForDownload, DisablementReason, IUpdate, State, StateType, UpdateType } from '../common/update.js';
+import { AvailableForDownload, DisablementReason, isNewerProductVersion, IUpdate, State, StateType, UpdateType } from '../common/update.js';
 import { AbstractUpdateService, createUpdateURL, getUpdateRequestHeaders, IUpdateURLOptions, UpdateErrorClassification } from './abstractUpdateService.js';
 
 interface IAvailableUpdate {
@@ -222,8 +222,9 @@ export class Win32UpdateService extends AbstractUpdateService implements IRelaun
 				if (!update || !update.url || !update.version || !update.productVersion
 					// Update feeds that ignore the commit hash (release-server
 					// returning the latest build unconditionally) would offer the
-					// already-installed version forever; compare versions client-side.
-					|| update.version === this.productService.version
+					// already-installed version — or an older one — forever; only a
+					// strictly newer product version is accepted, compared client-side.
+					|| !isNewerProductVersion(update.productVersion, this.productService.version)
 				) {
 					// If we were checking for an overwrite update and found nothing newer,
 					// restore the Ready state with the pending update

@@ -309,19 +309,34 @@ PATCHES = [
      "registry: alias Void-style tool names so agents keep their capabilities",
      'scope(i){const e=new Map;for(const t of i){const n=this._tools.get(t);n?e.set(t,n):console.warn(`[ToolRegistry] Scoped tool "${t}" not found in registry`)}return new Qxs(e)}',
      'scope(i){const _al={webFetch:"httpRequest",web_fetch:"httpRequest",fetchUrl:"httpRequest",editFile:"writeFile",edit_file:"writeFile",rewriteFile:"writeFile",rewrite_file:"writeFile",write_file:"writeFile",read_file:"readFile",delete_file:"deleteFile",bash:"runCommand",run:"runCommand",exec:"runCommand",shell:"runCommand",terminal:"runCommand",run_script:"runScript",git_status:"gitStatus",git_diff:"gitDiff",git_log:"gitLog",grep:"searchCode",search:"searchCode",glob:"listDirectory",list_dir:"listDirectory"};const e=new Map;for(const t of i){const _n=_al[t]||t;const n=this._tools.get(_n);n?e.has(_n)||e.set(_n,n):console.warn(`[ToolRegistry] Scoped tool "${t}" not found in registry`)}return new Qxs(e)}'),
-    # ── fix(updater): endless update banner (server ignores commit) ─────────
-    # Their update API returns the latest release for ANY commit hash, so the
-    # client offers (and re-offers forever) the already-installed version.
-    # Skip an update whose version equals the installed product.json version.
-    # Pairs with the version stamping below. The old equality check still
-    # prompted forever when the installed BASE version (e.g. 1.99.3) differs
-    # from the server's MARKETING version (1.1.3) — their updater compares
-    # strings, not semver. Skip whenever the installed version is semver >=
-    # the server's.
+    # ── fix(updater): the update feed hands out a DOWNGRADE ────────────────
+    # https://.../api/update/win32-x64/stable/<anything> always answers
+    # 200 {"name":"1.1.3","productVersion":"1.1.3", …} — it never compares
+    # versions and never returns 204. The installed build is 1.127.0, so
+    # every client is told to "update" backwards to 1.1.3, forever.
+    #
+    # Two independent code paths act on that answer and BOTH must refuse it:
+    #
+    #   1. the Void auto-updater (VoidAutoUpdaterService.check) — no guard at
+    #      all; it starts a silent background download and shows
+    #      "Neural Inverse 1.1.3 is available — downloading in background...";
+    #   2. the VS Code win32 update service — guarded, but only by string
+    #      EQUALITY (`l.version===this.productService.version`), which is
+    #      false for "1.1.3" vs "1.127.0", so it downloads the downgrade too.
+    #
+    # Both now demand a strictly NEWER version, compared numerically segment
+    # by segment; an unparseable version is never newer, so a malformed feed
+    # answer can no longer move the installed build.
+    # Source fix: isNewerProductVersion in vs/platform/update/common/update.ts,
+    # used by updateService.{win32,darwin,linux}.ts and voidAutoUpdaterService.
     (MAINJS,
-     "updater: skip update when installed version is semver >= server's",
-     'return!i||!i.url||!i.version||!i.productVersion?(this.setState(_e.Idle(s)),Promise.resolve(null)):s===1?(',
-     'return!i||!i.url||!i.version||!i.productVersion||(function(a,b){try{a=String(a).split(".").map(Number);b=String(b).split(".").map(Number);for(var k=0;k<3;k++){var x=a[k]|0,y=b[k]|0;if(x!==y)return x>y}return!0}catch(_e){return!1}})(this.productService.version,i.version)?(this.setState(_e.Idle(s)),Promise.resolve(null)):s===1?('),
+     "updater: void auto-updater refuses a non-newer version",
+     'if(a.status===200&&a.body){let l=JSON.parse(a.body);return this._state={type:"idle"},{version:l.name,downloadUrl:l.url}}',
+     r'if(a.status===200&&a.body){let l=JSON.parse(a.body);if(!(function(c,i){try{var A=String(c).match(/(\d+)(?:\.(\d+))?(?:\.(\d+))?/),B=String(i).match(/(\d+)(?:\.(\d+))?(?:\.(\d+))?/);if(!A||!B)return!1;for(var k=1;k<4;k++){var x=+(A[k]||0),y=+(B[k]||0);if(x!==y)return x>y}return!1}catch(e){return!1}})(l.name,r))return this._state={type:"up-to-date"},null;return this._state={type:"idle"},{version:l.name,downloadUrl:l.url}}'),
+    (MAINJS,
+     "updater: win32 update service refuses a non-newer version",
+     '!l.productVersion||l.version===this.productService.version)',
+     r'!l.productVersion||!(function(c,i){try{var A=String(c).match(/(\d+)(?:\.(\d+))?(?:\.(\d+))?/),B=String(i).match(/(\d+)(?:\.(\d+))?(?:\.(\d+))?/);if(!A||!B)return!1;for(var k=1;k<4;k++){var x=+(A[k]||0),y=+(B[k]||0);if(x!==y)return x>y}return!1}catch(e){return!1}})(l.productVersion,this.productService.version))'),
     # ── fix(mcp): tool-call errors serialized to {} — the real message was ──
     # swallowed. _safeCallTool stringified plain Errors with JSON.stringify,
     # which is ALWAYS "{}" for Error (message/stack are non-enumerable), so
@@ -1146,7 +1161,7 @@ def patch_product_json(root: Path) -> list:
 
 # ─── Commands ─────────────────────────────────────────────────────────────────
 
-def cmd_apply(root: Path, allow_missing: list) -> int:
+def cmd_apply(root: Path, allow_missing: list, only: list) -> int:
     paths = _paths(root)
     manifest = _load_manifest(root)
     states = _file_states(root, manifest)
@@ -1192,6 +1207,7 @@ def cmd_apply(root: Path, allow_missing: list) -> int:
         "patches": [],
         "prepends": [],
         "allowedMissing": [],
+        "only": list(only) if only else None,
     }
 
     # Injected runtime modules first (patches below reference them).
@@ -1400,6 +1416,24 @@ def _rebase(root: Path) -> None:
     PREPENDS[:] = [(swap(f), n, sn, c) for (f, n, sn, c) in PREPENDS]
 
 
+def _select_only(filters: list) -> int:
+    """Narrow PATCHES/PREPENDS to the patches whose name contains any filter.
+
+    A targeted re-apply (one fix, on a build the rest of the patch set has
+    drifted away from) would otherwise drown in unrelated MISSING lines and
+    exit 1 without ever reporting on the patch you came for. Returns the
+    number of patches left, so an empty selection can be refused instead of
+    silently "succeeding" with nothing to do.
+    """
+    keep = [i for i, (_f, name, _o, _n) in enumerate(PATCHES)
+            if any(sub in name for sub in filters)]
+    sites = [PATCH_SITES[i] for i in keep]
+    PATCHES[:] = [PATCHES[i] for i in keep]
+    PATCH_SITES[:] = sites
+    PREPENDS[:] = [pp for pp in PREPENDS if any(sub in pp[1] for sub in filters)]
+    return len(PATCHES)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Live-patch the installed NeuralInverse IDE")
     parser.add_argument("--verify", action="store_true", help="read-only check that every patch's effect is present")
@@ -1408,12 +1442,19 @@ def main() -> int:
     parser.add_argument("--rebaseline", action="store_true", help="adopt current files as the new baseline (after an app update)")
     parser.add_argument("--allow-missing", action="append", default=[], metavar="NAME=REASON",
                         help="acknowledge a missing patch, with the reason recorded in the manifest")
+    parser.add_argument("--only", action="append", default=[], metavar="SUBSTR",
+                        help="act only on patches whose name contains SUBSTR (repeatable)")
     parser.add_argument("--root", default=None, help="app root override (testing sandbox)")
     args = parser.parse_args()
 
     root = Path(args.root) if args.root else APP
     if root != APP:
         _rebase(root)
+    if args.only:
+        if _select_only(args.only) == 0:
+            print(f"ERROR: --only {args.only} matched no patch name")
+            return 1
+        print(f"--only {args.only}: {len(PATCHES)} patch(es), {len(PREPENDS)} prepend(s) selected")
     if args.verify:
         return cmd_verify(root)
     if args.status:
@@ -1422,7 +1463,7 @@ def main() -> int:
         return cmd_revert(root)
     if args.rebaseline:
         return cmd_rebaseline(root)
-    return cmd_apply(root, args.allow_missing)
+    return cmd_apply(root, args.allow_missing, args.only)
 
 
 if __name__ == "__main__":
