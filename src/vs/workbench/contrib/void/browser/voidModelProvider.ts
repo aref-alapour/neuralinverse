@@ -35,11 +35,13 @@ import {
 	IChatAgentHistoryEntry,
 	IChatAgentRequest,
 } from '../../chat/common/participants/chatAgents.js';
-import { IChatProgress, ToolConfirmKind } from '../../chat/common/chatService/chatService.js';
+import { ConfirmedReason, IChatProgress, IChatToolInvocation, ToolConfirmKind } from '../../chat/common/chatService/chatService.js';
 import { ChatAgentLocation, ChatModeKind } from '../../chat/common/constants.js';
 import { LLMChatMessage, OpenAILLMChatMessage, RawToolCallObj } from '../common/sendLLMMessageTypes.js';
 import { ILanguageModelToolsService, IToolData, ToolDataSource } from '../../chat/common/tools/languageModelToolsService.js';
 import { ChatToolInvocation } from '../../chat/common/model/chatProgressTypes/chatToolInvocation.js';
+import { waitForState } from '../../../../base/common/observable.js';
+import { localize } from '../../../../nls.js';
 import { URI } from '../../../../base/common/uri.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
@@ -48,7 +50,7 @@ import { IConvertToLLMMessageService } from './convertToLLMMessageService.js';
 import { extractXMLToolsWrapper } from '../common/llmMessage/extractGrammar.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { InternalToolInfo, isABuiltinToolName } from '../common/prompt/prompts.js';
-import { BuiltinToolName } from '../common/toolsServiceTypes.js';
+import { approvalTypeOfBuiltinToolName, BuiltinToolName } from '../common/toolsServiceTypes.js';
 
 const NI_EXTENSION_ID = new ExtensionIdentifier('neuralInverse.void');
 const NI_AGENT_ID = 'neuralInverse.default';
@@ -504,8 +506,16 @@ class VoidChatAgentImpl implements IChatAgentImplementation {
 		// browser tools, testing tools, subagent, etc.) and convert to void's InternalToolInfo.
 		// These are passed as mcpTools — void's sendLLMMessage appends them to the agent tool list.
 		// ni_* tools (voidToolsBridge) are excluded: void's own builtin tool execution handles them.
+		// Honour the tool picker: when the user has narrowed the tool set for this request,
+		// offering the model everything registered is how a disabled tool still gets called
+		// (task A7 item 1). An entry missing from the map means "not chosen"; an empty/absent
+		// map means the user never narrowed anything, so everything stays available.
+		const userSelectedTools = request.userSelectedTools;
+		const isToolAllowed = (toolId: string): boolean =>
+			!userSelectedTools || Object.keys(userSelectedTools).length === 0 || userSelectedTools[toolId] === true;
 		const copilotMcpTools: InternalToolInfo[] = Array.from(this._lmToolsService.getTools(undefined))
 			.filter(t => !t.id.startsWith('ni_'))
+			.filter(t => isToolAllowed(t.id))
 			.map(copilotToolToInternalToolInfo);
 
 		// Build message history as plain OpenAI-style messages.
@@ -700,7 +710,7 @@ class VoidChatAgentImpl implements IChatAgentImplementation {
 								context: { sessionResource: request.sessionResource },
 								chatRequestId: request.requestId,
 								tokenBudget: undefined,
-								userSelectedTools: undefined,
+								userSelectedTools: request.userSelectedTools,
 							},
 							async (txt) => Math.ceil(txt.length / 4),
 							token,
@@ -716,12 +726,52 @@ class VoidChatAgentImpl implements IChatAgentImplementation {
 					}
 				} else if (isABuiltinToolName(toolName)) {
 					// --- Void harness ---
-					// Transition Streaming → Executing so the spinner shows the "running" state.
+					// Tools that mutate the workspace or run commands need the same approval
+					// here as they do in the sidebar (`chatThreadService` consults the very same
+					// map before running one). Without this the identical tool ran unattended
+					// just because the request arrived through the native chat — task A7 item 2.
+					const approvalType = approvalTypeOfBuiltinToolName[toolName];
+					const autoApprove = approvalType
+						? this._settingsService.state.globalSettings.autoApprove[approvalType] === true
+						: false;
+					// `undefined` makes transitionFromStreaming park the invocation in
+					// WaitingForConfirmation and render the native confirmation buttons.
+					const autoConfirmed: ConfirmedReason | undefined = !approvalType
+						? { type: ToolConfirmKind.ConfirmationNotNeeded }
+						: autoApprove
+							? { type: ToolConfirmKind.Setting, id: `void.autoApprove.${approvalType}` }
+							: undefined;
 					invocation.transitionFromStreaming(
-						{ invocationMessage: new MarkdownString(invocationMsg) },
+						{
+							invocationMessage: new MarkdownString(invocationMsg),
+							confirmationMessages: approvalType && !autoApprove
+								? {
+									title: localize('void.toolConfirm.title', "Allow {0}?", toolData.displayName),
+									message: localize('void.toolConfirm.message', "The agent wants to run \"{0}\". This can change files or run commands in your workspace.", toolData.displayName),
+									allowAutoConfirm: true,
+								}
+								: undefined,
+						},
 						rawParams,
-						{ type: ToolConfirmKind.ConfirmationNotNeeded },
+						autoConfirmed,
 					);
+					if (autoConfirmed === undefined) {
+						// Park until the user answers. Denied/Skipped land in Cancelled; the
+						// model is told the call was refused so it can pick another route.
+						const settled = await waitForState(
+							invocation.state,
+							s => s.type === IChatToolInvocation.StateKind.Executing
+								|| s.type === IChatToolInvocation.StateKind.Cancelled,
+							undefined,
+							token,
+						);
+						if (settled.type === IChatToolInvocation.StateKind.Cancelled) {
+							toolResultText = `The user denied permission to run "${toolName}". Do not retry it; explain what you wanted to do, or choose a read-only alternative.`;
+							await invocation.didExecuteTool({ content: [{ kind: 'text', value: toolResultText }], toolResultError: true });
+							loopMessages.push({ role: 'user', content: `<tool_result name="${toolName}" id="${toolCallId}">\n${toolResultText}\n</tool_result>` });
+							continue;
+						}
+					}
 					const pastTenseMsg = voidMeta?.pastTenseLabel(rawParams);
 					// Build an input summary for the collapsible pill header (key param, max 120 chars).
 					const inputSummary = (
