@@ -12,7 +12,7 @@ import { IContextKeyService } from '../../../../platform/contextkey/common/conte
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { IVoidSettingsService } from '../common/voidSettingsService.js';
 import { ILLMMessageService } from '../common/sendLLMMessageService.js';
-import { ProviderName, providerNames, displayInfoOfProviderName } from '../common/voidSettingsTypes.js';
+import { OverridesOfModel, ProviderName, providerNames, displayInfoOfProviderName } from '../common/voidSettingsTypes.js';
 import { getModelCapabilities } from '../common/modelCapabilities.js';
 import { ChatEntitlementContextKeys } from '../../../services/chat/common/chatEntitlementService.js';
 import {
@@ -35,13 +35,11 @@ import {
 	IChatAgentHistoryEntry,
 	IChatAgentRequest,
 } from '../../chat/common/participants/chatAgents.js';
-import { IChatProgress } from '../../chat/common/chatService/chatService.js';
+import { IChatProgress, ToolConfirmKind } from '../../chat/common/chatService/chatService.js';
 import { ChatAgentLocation, ChatModeKind } from '../../chat/common/constants.js';
 import { LLMChatMessage, OpenAILLMChatMessage, RawToolCallObj } from '../common/sendLLMMessageTypes.js';
-import { OverridesOfModel } from '../common/voidSettingsTypes.js';
 import { ILanguageModelToolsService, IToolData, ToolDataSource } from '../../chat/common/tools/languageModelToolsService.js';
 import { ChatToolInvocation } from '../../chat/common/model/chatProgressTypes/chatToolInvocation.js';
-import { ToolConfirmKind } from '../../chat/common/chatService/chatService.js';
 import { URI } from '../../../../base/common/uri.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
@@ -55,6 +53,33 @@ import { BuiltinToolName } from '../common/toolsServiceTypes.js';
 const NI_EXTENSION_ID = new ExtensionIdentifier('neuralInverse.void');
 const NI_AGENT_ID = 'neuralInverse.default';
 const MAX_TOOL_ITERATIONS = 20;
+
+/** The vendor entry the model picker groups our BYOLLM models under. */
+const NI_PROVIDER_DESCRIPTOR: IUserFriendlyLanguageModel = {
+	vendor: 'neuralInverse',
+	displayName: 'Neural Inverse',
+	// Models come from the Void settings pane, not a contributed configuration,
+	// and the provider is always available — so these three carry no value.
+	configuration: undefined,
+	managementCommand: undefined,
+	when: undefined,
+};
+
+/** A streamed text chunk, typed at construction so callers need no assertion. */
+const textPart = (value: string): IChatResponsePart => ({ type: 'text', value });
+
+/**
+ * Message of a thrown value. `catch` binds `unknown`, and providers throw a mix
+ * of Error, string, and API error objects, so narrow before reading `.message`.
+ */
+function messageOfThrown(e: unknown): string {
+	if (e instanceof Error) { return e.message; }
+	if (typeof e === 'object' && e !== null) {
+		const m = (e as { message?: unknown }).message;
+		if (typeof m === 'string') { return m; }
+	}
+	return String(e);
+}
 
 /** Per-tool display metadata for the native chat pill UI. */
 interface VoidToolMeta {
@@ -685,8 +710,8 @@ class VoidChatAgentImpl implements IChatAgentImplementation {
 							.map(p => (p as { kind: 'text'; value: string }).value)
 							.join('\n');
 						await invocation.didExecuteTool({ content: [{ kind: 'text', value: toolResultText }] });
-					} catch (e: any) {
-						toolResultText = `Tool error: ${e?.message ?? String(e)}`;
+					} catch (e) {
+						toolResultText = `Tool error: ${messageOfThrown(e)}`;
 						await invocation.didExecuteTool({ content: [{ kind: 'text', value: toolResultText }], toolResultError: true });
 					}
 				} else if (isABuiltinToolName(toolName)) {
@@ -711,8 +736,8 @@ class VoidChatAgentImpl implements IChatAgentImplementation {
 						const { result } = await this._toolsService.callTool[toolName](typedParams as never);
 						const awaitedResult = await result;
 						toolResultText = (this._toolsService.stringOfResult[toolName] as (p: unknown, r: unknown) => string)(typedParams, awaitedResult);
-					} catch (e: any) {
-						toolResultText = `Tool error: ${e?.message ?? String(e)}`;
+					} catch (e) {
+						toolResultText = `Tool error: ${messageOfThrown(e)}`;
 						isError = true;
 					}
 					// Attach toolSpecificData so the chat renderer picks the right sub-part widget.
@@ -836,7 +861,7 @@ class VoidModelProvider extends Disposable implements IWorkbenchContribution, IL
 	private _registerAll(): void {
 		// Register language model vendor + provider for the model picker
 		this._languageModelsService.deltaLanguageModelChatProviderDescriptors(
-			[{ vendor: 'neuralInverse', displayName: 'Neural Inverse' } as IUserFriendlyLanguageModel],
+			[NI_PROVIDER_DESCRIPTOR],
 			[]
 		);
 		this._lmRegistration.value = this._languageModelsService.registerLanguageModelProvider('neuralInverse', this);
@@ -984,12 +1009,12 @@ class VoidModelProvider extends Disposable implements IWorkbenchContribution, IL
 				while (true) {
 					// Drain all queued chunks
 					while (idx < queue.length) {
-						yield { type: 'text', value: queue[idx++] } as IChatResponsePart;
+						yield textPart(queue[idx++]);
 					}
 					if (done) {
 						// Drain any final chunks added before done flag
 						while (idx < queue.length) {
-							yield { type: 'text', value: queue[idx++] } as IChatResponsePart;
+							yield textPart(queue[idx++]);
 						}
 						if (error) {
 							throw error;
