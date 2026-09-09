@@ -207,6 +207,9 @@ compaction ای که از نظر الگوریتم جلوتر است.
 | M1 | 🟡 | درون M5 | journal = persistence؛ کلید conversationId در فاز ۵ بسته شد؛ تست owner مانده |
 | M2 | 🟡 | درون `feat/context-ledger` | **موج ۳ (۰۹-۰۸):** recall روی مسیر تزریق وصل شد (کوئری از task+working memory) + backfill + provider معتبر؛ تست owner مانده |
 | M3 / M4 | 🔴 | — | روی زیرساخت M5 در session بعدی |
+| **M1 / M2 / M5** | ✅ | — | **تست owner سبز ۰۹-۰۹** روی بیلد نصبی `9a520bdfa81` |
+| **M7** | ✅ | `537d704b20d` | یکی‌شدن دو سیستم حافظه — تست owner سبز |
+| **A8** | ✅ | `39f204774d7` | دو شکاف پاریتی چت بومی + گیت پاریتی — تست owner سبز |
 | **A7** | 🔴 | — | **جدید ۰۹-۰۸** — سخت‌سازی پل چت بومی؛ پرلوریج‌ترین تسک بک‌لاگ |
 | **Q12** | 🟡 | `213acb1`, `a5ccefb` | usage روی desktop می‌رسد (هر دو مسیر chat + تست پاریتی در verify)؛ پورت live-patch + تست owner باز؛ ~۱۵ هشدار لینت سخت فایل باقی (Q11) |
 | **Q13** | 🟡 | `3e16228` | گیت reachability در verify.mjs (با هوک hygiene سبز)؛ ۲۵۹ فایل، ۶ یتیم مستند، ۰ غیرمنتظره؛ تصمیم voiceEventStream با owner |
