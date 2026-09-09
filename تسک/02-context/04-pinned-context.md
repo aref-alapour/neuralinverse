@@ -1,8 +1,36 @@
 # C4 — Context سنجاق‌شده و Notepads (Pinned Files + Notepad Blocks)
 
-- **اولویت:** P1 | **برآورد:** M | **وضعیت:** 🔴 | **وابستگی:** C3
+- **اولویت:** P1 | **برآورد:** M (باقی‌مانده: M) | **وضعیت:** 🟡 مسیر تزریق آماده، مصرف‌کننده ندارد | **وابستگی:** C3
 - **هم‌ارز در Cursor:** فایل‌های Pinned که همیشه در context می‌مانند + Notepads
   (بلاک‌های context قابل استفاده‌ی مجدد)
+
+## وضعیت راستی‌آزمایی‌شده (۲۰۲۶-۰۹-۰۷)
+
+**مارکر قبلی 🔴 کهنه بود** — گام ۳ و ۴ طرح (تزریق + مصونیت از فشرده‌سازی) در
+جریان M5 از قبل ساخته شده‌اند.
+
+**انجام‌شده:**
+- `assemble()` ورودی `pinnedBlocks?: string[]` می‌گیرد (`contextAssembler.ts:55`)
+  و آن‌ها را به‌صورت `<pinned_context>…</pinned_context>` رندر می‌کند (`:158`)
+- ترتیب پایدار `brief → pinned → recalled → tail` تضمین شده (`:153`) و pinned در
+  محاسبه‌ی بودجه لحاظ می‌شود (`:121,135`)
+- **مصونیت از compaction ذاتی است**: pinned جزء head است و فقط tail کوتاه می‌شود
+- تست‌ها موجودند: `test/node/contextAssembler.test.ts:199,235`
+
+**باقی‌مانده — هیچ‌چیز در production این را پُر نمی‌کند:**
+- [ ] `IPinnedItem` و ذخیره‌ی per-workspace در `IStorageService` — وجود ندارد
+- [ ] ورودی‌های UI (منوی ادیتور، دکمه‌ی pin روی chip، Notepad)
+- [ ] وصل کردن به فراخوانی `assemble()` در `chatThreadService.ts:357`
+- [ ] سقف ۸ آیتم / ۲۰k توکن + هشدار
+
+**نکته:** `grep pinnedBlocks` بیرون از `contextAssembler.ts` **فقط فایل تست** را
+برمی‌گرداند — یعنی قابلیت ساخته و تست شده ولی هرگز در مسیر واقعی صدا زده نمی‌شود.
+برآورد کار از M به «M ولی بدون کار assembler» کاهش می‌یابد.
+
+**دستور بازتولید:**
+```bash
+grep -rn "pinnedBlocks" src/ | grep -v contextAssembler.ts   # → فقط فایل تست
+```
 
 ## هدف
 دو مکانیزم «چسباندن» context:

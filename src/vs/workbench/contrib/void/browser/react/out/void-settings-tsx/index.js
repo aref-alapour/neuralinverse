@@ -30042,7 +30042,24 @@ var AssistantMessageComponent = import_react16.default.memo(({ chatMessage, isCh
         isApplyEnabled: true,
         isLinkDetectionEnabled: true
       }
-    ) }) })
+    ) }) }),
+    isCommitted && (chatMessage.durationMs ?? 0) > 0 && /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("div", { className: "void-flex void-items-center void-gap-1 void-pt-0.5 void-mt-1", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+        "span",
+        {
+          className: "void-text-[10px] void-font-mono void-uppercase void-tracking-wider void-text-[var(--vscode-descriptionForeground)] void-opacity-60 void-select-none",
+          title: "Wall-clock duration of the agent run that produced this message",
+          children: chatMessage.durationMs >= 36e5 ? `${Math.floor(chatMessage.durationMs / 36e5)}h ${Math.floor(chatMessage.durationMs % 36e5 / 6e4)}m` : chatMessage.durationMs >= 6e4 ? `${Math.floor(chatMessage.durationMs / 6e4)}m ${Math.floor(chatMessage.durationMs % 6e4 / 1e3)}s` : `${(chatMessage.durationMs / 1e3).toFixed(1)}s`
+        }
+      ),
+      /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+        CopyButton,
+        {
+          codeStr: (chatMessage.displayContent || "").replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim(),
+          toolTipName: "Copy message"
+        }
+      )
+    ] })
   ] });
 });
 var ReasoningTimer = import_react16.default.memo(({ isWriting, startTimeRef, finalTimeRef }) => {
@@ -33059,6 +33076,20 @@ var Settings = () => {
                 /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("div", { className: `void-my-2 ${settingsState2.globalSettings.syncApplyToChat ? "void-hidden" : ""}`, children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(ModelDropdown, { featureName: "Apply", className: "void-text-xs void-text-void-fg-3 void-bg-void-bg-1 void-border void-border-void-border-1 void-rounded void-p-0.5 void-px-1" }) })
               ] }),
               /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("div", { className: "void-my-2", children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("div", { className: "void-flex void-items-center void-gap-x-2 void-my-2", children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(FastApplyMethodDropdown, {}) }) })
+            ] }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(ErrorBoundary_default, { children: /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("div", { className: "void-my-2", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("div", { className: "void-flex void-items-center void-gap-x-2 void-my-2", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
+                  VoidSwitch,
+                  {
+                    size: "xs",
+                    value: settingsState2.globalSettings.contextLedgerEnabled,
+                    onChange: (newVal) => voidSettingsService.setGlobalSetting("contextLedgerEnabled", newVal)
+                  }
+                ),
+                /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("span", { className: "void-text-void-fg-3 void-text-xs void-pointer-events-none", children: settingsState2.globalSettings.contextLedgerEnabled ? "Ledger context (brief + episodes + recall)" : "Legacy compaction" })
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("div", { className: "void-text-sm void-text-void-fg-3 void-mt-1", children: "Context Ledger keeps a permanent archive of the conversation and sends the model a stable working brief instead of growing history." })
             ] }) }),
             /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("div", { children: [
               /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("h4", { className: `void-text-base`, children: "Tools" }),

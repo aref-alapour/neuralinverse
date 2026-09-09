@@ -1,7 +1,46 @@
 # C7 — تجربه‌ی کاربری Compaction (شفراف و قابل کنترل)
 
-- **اولویت:** P0 | **برآورد:** S | **وضعیت:** 🟡 هست، UX ندارد | **وابستگی:** C2
+- **اولویت:** P0 | **برآورد:** S | **وضعیت:** 🟡 موتور هست، UX دقیقاً صفر | **وابستگی:** C2
+
+> **اصلاح دامنه ۲۰۲۶-۰۹-۰۸ — حالا دو مسیر را پوشش می‌دهد، نه یکی.**
+> بعد از [A7](../03-agent-parity/07-native-chat-bridge.md) بند ج
+> (`4c1e1c16b56`)، گفتگوی **چت بومی هم** در ledger می‌نشیند. پس `/compact` و
+> کارت summary باید هر دو سطح را بگیرند: سایدبار Void و چت بومی.
+>
+> دو قطعه‌ی آماده که نباید دوباره ساخته شوند:
+> - `chat/common/tools/toolResultCompressor.ts` — لایه‌ی فشرده‌سازی خروجی ابزار
+>   (همان چیزی که [F2](../06-freebuff/F2-mechanical-compaction.md) می‌خواهد)
+> - `COMPACT_AGENT_HOST_CONVERSATION_ACTION_ID` در
+>   `chatContextUsageDetails.ts` — الگوی اکشن `/compact` هسته، هرچند فعلاً فقط
+>   برای agentHost است
+>
+> ارجاع خط `slashCommands: []` در متن پایین به‌روز شد: الان
+> `voidModelProvider.ts:987` است (فایل از زمان نگارش تسک عوض شده).
 - **هم‌ارز در Cursor/Claude Code:** compaction خودکار قابل مشاهده + دستور /compact
+
+## وضعیت راستی‌آزمایی‌شده (۲۰۲۶-۰۹-۰۷)
+
+راستی‌آزمایی شد: **مارکر درست بود** و «UX ندارد» را باید تحت‌اللفظی خواند —
+هیچ‌یک از ۵ گام طرح انجام نشده است.
+
+- [ ] `/compact`: هیچ پارسر دستور خطی در ورودی چت نیست.
+      `slashCommands: []` در `voidModelProvider.ts:987` خالی است.
+- [ ] state `compacting`: تنها اثر compaction در UI یک `ctx.log` در
+      `neuralInverse/browser/executor/agentExecutor.ts:597` است — که در چت
+      sidebar اصلاً دیده نمی‌شود.
+- [ ] `SummaryCard`: `conversation_summary` فقط در `conversationCompactor.ts`
+      تولید می‌شود و هیچ رندر اختصاصی ندارد.
+- [ ] toast «Xk توکن آزاد شد» و ستون compactions.
+
+**قید مسیر دوگانه (مهم):** حالا دو مسیر فشرده‌سازی موازی وجود دارد —
+`_assembleLedgerThread` (ledger، پیش‌فرض روشن) و `_maybeCompactThreadForSend`
+(legacy). UX باید **هر دو** را پوشش دهد وگرنه در حالت پیش‌فرض چیزی نشان نمی‌دهد.
+این در طرح اصلی نبود چون آن موقع ledger وجود نداشت.
+
+**دستور بازتولید:**
+```bash
+grep -rn "slashCommand" src/vs/workbench/contrib/void/ | head
+```
 
 ## هدف
 موتور compaction ما (از کامیت `ee5e39f`) از نظر الگوریتم جلوتر از اکثر رقاست؛ ولی

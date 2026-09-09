@@ -29988,7 +29988,24 @@ var AssistantMessageComponent = import_react16.default.memo(({ chatMessage, isCh
         isApplyEnabled: true,
         isLinkDetectionEnabled: true
       }
-    ) }) })
+    ) }) }),
+    isCommitted && (chatMessage.durationMs ?? 0) > 0 && /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("div", { className: "void-flex void-items-center void-gap-1 void-pt-0.5 void-mt-1", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+        "span",
+        {
+          className: "void-text-[10px] void-font-mono void-uppercase void-tracking-wider void-text-[var(--vscode-descriptionForeground)] void-opacity-60 void-select-none",
+          title: "Wall-clock duration of the agent run that produced this message",
+          children: chatMessage.durationMs >= 36e5 ? `${Math.floor(chatMessage.durationMs / 36e5)}h ${Math.floor(chatMessage.durationMs % 36e5 / 6e4)}m` : chatMessage.durationMs >= 6e4 ? `${Math.floor(chatMessage.durationMs / 6e4)}m ${Math.floor(chatMessage.durationMs % 6e4 / 1e3)}s` : `${(chatMessage.durationMs / 1e3).toFixed(1)}s`
+        }
+      ),
+      /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+        CopyButton,
+        {
+          codeStr: (chatMessage.displayContent || "").replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim(),
+          toolTipName: "Copy message"
+        }
+      )
+    ] })
   ] });
 });
 var ReasoningTimer = import_react16.default.memo(({ isWriting, startTimeRef, finalTimeRef }) => {

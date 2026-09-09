@@ -1,7 +1,32 @@
 # A1 — وصل کردن حلقه‌ی LLM به Background Agents
 
-- **اولویت:** P0 | **برآورد:** M | **وضعیت:** 🔴 (ماکارندی git آماده، مغز ندارد) | **وابستگی:** —
+- **اولویت:** P0 | **برآورد:** M | **وضعیت:** 🔴 — مغز ندارد **و سرویسش اصلاً ثبت نشده** | **وابستگی:** [Q13](../05-quality/13-contribution-registration-gate.md)
 - **هم‌ارز در Cursor:** Background Agents — تسک را پس بده، برود روی worktree کار کند و PR بدهد
+
+> **اصلاح صورت‌مسئله ۲۰۲۶-۰۹-۰۸ — سه چیز که طرح اولیه ندیده بود:**
+>
+> ۱. **«ماکارندی git آماده است» گمراه‌کننده است.** `backgroundAgentService`،
+> `backgroundAgentPanel`، `backgroundAgentCommands` و `agentManagerPart` فقط از
+> `neuralInverse.contribution.ts` ثبت می‌شوند، و آن فایل **هیچ importer ای ندارد**
+> (نه در `src`، نه در `out`). یعنی این کد در زمان اجرا بارگذاری نمی‌شود:
+>
+> ```bash
+> grep -rn "neuralInverse\.contribution" src build out       # صفر در هر سه
+> grep -rn "backgroundAgentService" src --include=*.ts | grep -v contrib/neuralInverse/   # صفر
+> ```
+>
+> پیش‌نیاز واقعی این تسک [Q13 — گیت ثبت contribution](../05-quality/13-contribution-registration-gate.md) است.
+>
+> ۲. **باگ ویندوز:** مسیر worktree در `backgroundAgentService.ts:62` به‌صورت
+> `` `/tmp/ni-bg-${id}` `` هاردکد شده. روی ویندوز — پلتفرم اصلی مالک — هر اجرا
+> شکست می‌خورد. باید `IEnvironmentService.tmpDir` یا معادلش شود.
+>
+> ۳. **دیگر لازم نیست پوسته را از صفر بسازیم.** upstream ۱.۱۲۷ لایه‌ی کاملی دارد:
+> `chat/browser/agentSessions/` (۱۹ فایل) + `agentSessions/agentHost/` (۱۷ فایل) +
+> کل `vs/sessions/` + `contrib/remoteCodingAgents`. ما هنوز به‌عنوان session
+> provider ثبت نشده‌ایم (`grep registerChatSessionItemProvider contrib/void` → صفر).
+> **دامنه‌ی پیشنهادی جدید:** به‌جای ساختن صف/پنل/lifecycle، agent خودمان را به
+> این زیرساخت وصل کن و فقط executor با `cwd` مستقل را بنویس.
 
 ## هدف
 مهم‌ترین feature خالی محصول. تمام چرخه‌ی git (worktree/branch/commit/PR، حداکثر ۳ تا

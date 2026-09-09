@@ -5,8 +5,23 @@
 - **هم‌ارز در رقبا:** Cursor خودش را حول Composer بازسازی کرد؛ Claude Code یک harness
   واحد دارد — موفقیت‌شان محصول تک‌موتوری بودن است
 
+> ## ⚠️ اصلاح دامنه ۲۰۲۶-۰۹-۰۸ — **چهار** حلقه‌ی اجرا داریم، نه سه
+>
+> ممیزی سه‌گانه یک حلقه‌ی چهارم پیدا کرد که در این سند نیامده بود:
+> **`VoidChatAgentImpl`** در `void/browser/voidModelProvider.ts:471` — که agent
+> پیش‌فرضِ چت بومی VS Code است و حلقه‌ی tool-call مستقل خودش را دارد.
+> `neuralInverseAgentService` (کنترلر autonomy) هم لایه‌ی هماهنگ‌کننده‌ی پنجمی است.
+>
+> خبر خوب: بعد از [A7](../03-agent-parity/07-native-chat-bridge.md)، حلقه‌ی
+> چهارم دیگر واگرا نیست — همان map مجوز، همان ledger، و همان مرز ابزار سایدبار
+> را دارد. یعنی این تسک از «سه را یکی کن» به **«دو تای عقب‌مانده را برسان»**
+> تبدیل شد: Power Mode و workflow executor.
+>
+> فاز ۰ (سند معماری) هنوز لازم است، ولی ورودی‌اش عوض شده — جدول مسیرها را از
+> [A4](../03-agent-parity/04-unified-permissions.md) بردار، دوباره نساز.
+
 ## هدف — مسئله‌ی معماری اصلی پروژه
-سه stack موازی با سه پروتکل tool و سه مدل مجوز:
+چهار حلقه‌ی موازی (سه‌تای زیر + پل چت بومی) با پروتکل‌های tool و مدل‌های مجوز جدا:
 1. **Void chat** (`void/`) — ابزار native + KB + MCP (merge تا ۱۲۸ ابزار)
 2. **NI workflow engine** (`neuralInverse/`) — پروتکل JSON-block، ابزار خودش
 3. **Power Mode** (`powerMode/`, port از opencode) — ابزارهای خودش + bashSecurity

@@ -68,6 +68,16 @@ export const unicodeFilter = Object.freeze<string[]>([
 	// extensions/copilot has its own code style
 	'!extensions/copilot/**',
 
+	// Fork-authored contributions use box-drawing characters as section separators in
+	// comments; that is deliberate house style, not accidental unicode.
+	'!src/vs/workbench/contrib/void/**',
+	'!src/vs/workbench/contrib/neuralInverse/**',
+	'!src/vs/workbench/contrib/neuralInverseChecks/**',
+	'!src/vs/workbench/contrib/neuralInverseEnclave/**',
+	'!src/vs/workbench/contrib/neuralInverseFirmware/**',
+	'!src/vs/workbench/contrib/neuralInverseModernisation/**',
+	'!src/vs/workbench/contrib/powerMode/**',
+
 	'!src/vs/base/browser/dompurify/**',
 	'!src/vs/workbench/services/keybinding/browser/keyboardLayouts/**',
 	'!src/vs/workbench/contrib/terminal/common/scripts/psreadline/**',
@@ -107,6 +117,9 @@ export const indentationFilter = Object.freeze<string[]>([
 	'!test/automation/out/**',
 	'!test/monaco/out/**',
 	'!test/smoke/out/**',
+	// minified build artifacts committed per repo convention (eslint already
+	// ignores them via **/out/**; the whitespace rule has no meaning there)
+	'!src/vs/workbench/contrib/void/browser/react/out/**',
 	'!extensions/terminal-suggest/src/shell/zshBuiltinsCache.ts',
 	'!extensions/terminal-suggest/src/shell/fishBuiltinsCache.ts',
 	'!extensions/terminal-suggest/src/completions/upstream/**',

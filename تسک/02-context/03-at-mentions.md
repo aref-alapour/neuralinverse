@@ -1,7 +1,38 @@
 # C3 — منشن‌ها در ورودی چت (@file / @folder / @symbol / @agent / @web)
 
-- **اولویت:** P1 | **برآورد:** M/L | **وضعیت:** 🔴 | **وابستگی:** C2 (نمایش در gauge)
+- **اولویت:** P1 | **برآورد:** M/L (باقی‌مانده: M) | **وضعیت:** 🟡 @file/@folder کار می‌کند | **وابستگی:** C2 (نمایش در gauge)
 - **هم‌ارز در Cursor:** @Files @Folders @Code(symbol) @Web @Docs — قلب UX کنترل context
+
+## وضعیت راستی‌آزمایی‌شده (۲۰۲۶-۰۹-۰۷)
+
+**مارکر قبلی 🔴 نادرست بود** — ولی نه به‌خاطر کار ما: منوی `@` **از خود Void ارث
+رسیده** و با کامیت import اولیه آمده، نه با کار C3.
+
+**انجام‌شده (ارثی، ولی واقعاً کار می‌کند):**
+- منوی `@` با ناوبری کیبورد و breadcrumb: `react/src/util/inputs.tsx:357+`،
+  فعال‌شده با prop `enableAtToMention` در `SidebarChat.tsx:1220,4614`
+- دو منبع سطح‌بالا: `files` و `folders` (`inputs.tsx:288-297`) با جست‌وجوی fuzzy
+- انتخاب برگ **واقعاً به context می‌رود**: `chatThreadService.addNewStagingSelection()`
+  در `inputs.tsx:446` یک chip قابل حذف در ناحیه‌ی staging می‌سازد
+
+یعنی معیار پذیرش ۱ و ۲ («منو باز می‌شود / محتوای فایل وارد context می‌شود») **همین
+حالا برقرارند**.
+
+**باقی‌مانده (کار واقعی C3):**
+- [ ] `@symbol` — `workspaceSymbolIndex` آماده است ولی به منو وصل نیست
+      (`Option.leafNodeType` فقط `'File' | 'Folder'` است: `inputs.tsx:69`)
+- [ ] `@agent` — delegate به sub-agent
+- [ ] `@web` / `@docs`
+- [ ] بودجه‌ی توکن per-type (file=4000، symbol=1500) و گزارش سهم در breakdown (C2)
+
+**تصمیم لازم:** چون staging از قبل هست، «chip» جدا لازم نیست — بهتر است `@symbol`
+هم به همان `StagingSelectionItem` اضافه شود (نوع جدید) تا UI دوگانه نشود.
+
+**دستور بازتولید:**
+```bash
+git log --oneline -S "enableAtToMention" -- src/vs/workbench/contrib/void/browser/react/src/util/inputs.tsx
+# → فقط کامیت import اولیه (۱۶٬۹۲۹ فایل)
+```
 
 ## هدف
 در ورودی chat با تایپ `@` یک منوی fuzzy باز شود؛ انتخاب‌شده به chip تبدیل شود؛ chip ها

@@ -1,7 +1,24 @@
 # M1 — ماندگاری گفتگوی Agent ها (Conversation Persistence)
 
 - **اولویت:** P0 — ادامه‌ی مستقیم branch فعلی `feat/agent-conversation-memory`
-- **برآورد:** M | **وضعیت:** 🔴 شروع نشده | **وابستگی:** —
+- **برآورد:** M (باقی‌مانده: S/M) | **وضعیت:** ✅ چت — تست owner سبز (۰۹-۰۹)؛ ادامه‌ی نشست workflow agent باز (نک. پایین) | **وابستگی:** M5
+> **تست owner سبز شد (۲۰۲۶-۰۹-۰۹، بیلد `9a520bdfa81`).** شواهد در
+> [`00-OWNER-TESTS-ROUND-2.md`](00-OWNER-TESTS-ROUND-2.md) و ژورنال زنده‌ی
+> `escapezoom-html/.inverse/ledger/`.
+
+> **اصلاح مارکر ۲۰۲۶-۰۹-۰۸ (بستن دریفت R1 — فایل 🔴 بود، README 🟡):**
+> بخش «ذخیره‌سازی» این تسک دیگر باز نیست. سه لایه ماندگاری داریم:
+> thread های Void روی `THREAD_STORAGE_KEY` (`chatThreadService.ts:761–775`)،
+> ژورنال append-only ledger (M5)، و در استک بومی `ChatSessionStore` +
+> `chatSessionOperationLog` + `objectMutationLog` با نوشتن `append` واقعی.
+>
+> **آنچه واقعاً مانده:** نگاشت agent→`conversationId` هنوز `Map` در RAM است
+> (`workflowAgentService.ts:143`) و بعد از restart شناسه‌ی تازه می‌سازد؛ دو run
+> هم‌زمانِ یک agent همان شناسه را می‌گیرند؛ فقط turn موفق آرشیو می‌شود
+> (`:415`)؛ و فهرست/rename/delete/resume برای گفتگوهای workflow نداریم.
+>
+> ⚠️ توجه: `workflowAgentService` **زنده است** (ترانزیتی از `toolsService.ts:34`)
+> — برخلاف `backgroundAgentService` که ثبت نشده. پس این کار روی کد زنده است.
 - **هم‌ارز در Cursor:** ادامه‌ی thread بعد از بستن editor، تاریخچه‌ی گفتگوها، resume
 
 ## هدف

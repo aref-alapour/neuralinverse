@@ -1,8 +1,42 @@
 # C1 — اتصال Context Engine به همه‌ی نقاط ورودی
 
-- **اولویت:** P0 | **برآورد:** M | **وضعیت:** 🔴 | **وابستگی:** —
+- **اولویت:** P0 | **برآورد:** M (باقی‌مانده: S/M) | **وضعیت:** 🟡 ابزارها وصل‌اند، بودجه/ممیزی نه | **وابستگی:** —
 - **هم‌ارز در Cursor:** موتور context واحدی که پشت همه‌ی قابلیت‌ها (Chat / Ctrl+K /
   Composer / Tab) یکسان کار می‌کند
+
+## وضعیت راستی‌آزمایی‌شده (۲۰۲۶-۰۹-۰۷)
+
+راستی‌آزمایی روی کد، نه روی سند. **مارکر قبلی 🔴 کهنه بود.**
+
+**انجام‌شده — گام ۲ کامل است:**
+- شش ابزار `context_*` (`search_symbols` / `related_files` / `file_context` /
+  `import_graph` / `recent_edits` / `semantic_search`) داخل شیء `builtinTools`
+  ثبت شده‌اند: `prompt/prompts.ts:580-626` (شیء از خط ۱۸۲ باز می‌شود و تا بعد از
+  ۶۴۰ بسته نمی‌شود — پس هر شش تا عضو آن‌اند).
+- `availableTools()` در `prompts.ts:678` آن‌ها را به چت می‌دهد: `agent`/`copilot`/
+  `validate` کلِ `Object.keys(builtinTools)` را می‌گیرند، و `ask`/`reason`/`gather`
+  هم همه‌ی ابزارهای **بدون نیاز به تأیید** را — و چون هیچ‌کدام از شش ابزار `context_*`
+  در `approvalTypeOfBuiltinToolName` (`toolsServiceTypes.ts:21-38`، فقط edits/terminal)
+  نیستند، **در همه‌ی حالت‌های چت جز `power`/`checks` در دسترس‌اند** — نه فقط executor.
+- پیاده‌سازی‌شان در `void/browser/toolsService.ts:1146+` با import تنبل از
+  `neuralInverse/browser/context/tools/`؛ نوع‌ها در `toolsServiceTypes.ts:80,143`
+  و سطح تأیید در `neuralInverseAgentTypes.ts:56,204`.
+
+> نکته‌ی مهم برای بازبین بعدی: `grep searchSymbols` در `contrib/void` **جواب اشتباه
+> می‌دهد** — نام ابزارها snake_case است (`context_search_symbols`). همچنین ابزارها
+> در `chatThreadService` وصل نمی‌شوند؛ مسیرشان `prompts.ts` + `toolsService.ts` است.
+
+**باقی‌مانده:**
+- [ ] `matrix.md` (ماتریس ممیزی) — وجود ندارد
+- [ ] `contextBudgets` مرکزی — صفر hit در کل `src/`
+- [ ] Ctrl+K با حالت `inline-edit` بسته‌بندی
+- [ ] بسته‌ی context به‌ازای نقش در sub-agent ها
+
+**دستور بازتولید:**
+```bash
+grep -n "^\tcontext_" src/vs/workbench/contrib/void/common/prompt/prompts.ts
+grep -rn "contextBudgets" src/ | wc -l   # → 0
+```
 
 ## هدف
 Context Engine (که در `neuralInverse/browser/context/` یک موتور کامل است) به‌صورت

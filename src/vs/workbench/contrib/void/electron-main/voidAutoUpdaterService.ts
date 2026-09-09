@@ -27,13 +27,16 @@
  */
 
 import * as fs from 'fs';
-import * as path from 'path';
+import * as path from '../../../../base/common/path.js';
 import * as os from 'os';
-import * as https from 'https';
-import * as http from 'http';
+import { exec, spawn } from 'child_process';
+import { app } from 'electron';
+import type * as https from 'https';
+import type * as http from 'http';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
+import { isNewerProductVersion } from '../../../../platform/update/common/update.js';
 
 export const IVoidAutoUpdaterService = createDecorator<IVoidAutoUpdaterService>('voidAutoUpdaterService');
 
@@ -66,7 +69,7 @@ function vsPlatform(): string {
 	const p = process.platform;
 	const a = process.arch;
 	if (p === 'darwin') { return a === 'arm64' ? 'darwin-arm64' : 'darwin'; }
-	if (p === 'win32')  { return a === 'arm64' ? 'win32-arm64' : 'win32-x64'; }
+	if (p === 'win32') { return a === 'arm64' ? 'win32-arm64' : 'win32-x64'; }
 	// linux
 	return a === 'arm64' ? 'linux-arm64' : 'linux-x64';
 }
@@ -92,9 +95,9 @@ export class VoidAutoUpdaterService extends Disposable implements IVoidAutoUpdat
 	async check(): Promise<{ version: string; downloadUrl: string } | null> {
 		this._state = { type: 'checking' };
 
-		const updateUrl = (this._product as any).updateUrl as string | undefined;
-		const quality   = (this._product as any).quality   as string ?? 'stable';
-		const version   = this._product.version;
+		const updateUrl = this._product.updateUrl;
+		const quality = this._product.quality ?? 'stable';
+		const version = this._product.version;
 
 		if (!updateUrl) {
 			this._state = { type: 'error', message: 'No updateUrl configured.' };
@@ -113,6 +116,16 @@ export class VoidAutoUpdaterService extends Disposable implements IVoidAutoUpdat
 
 			if (res.status === 200 && res.body) {
 				const payload = JSON.parse(res.body) as { url: string; name: string };
+
+				// The server answers with whatever it considers the current release and does
+				// not compare versions itself, so a build it does not know about (a local
+				// build, or any version newer than the published one) is told to "update"
+				// backwards. Only accept a strictly newer version.
+				if (!isNewerProductVersion(payload.name, version)) {
+					this._state = { type: 'up-to-date' };
+					return null;
+				}
+
 				this._state = { type: 'idle' };
 				return { version: payload.name, downloadUrl: payload.url };
 			}
@@ -120,7 +133,7 @@ export class VoidAutoUpdaterService extends Disposable implements IVoidAutoUpdat
 			this._state = { type: 'error', message: `Update server returned ${res.status}` };
 			return null;
 
-		} catch (e: any) {
+		} catch (e) {
 			this._state = { type: 'error', message: String(e) };
 			return null;
 		}
@@ -131,8 +144,8 @@ export class VoidAutoUpdaterService extends Disposable implements IVoidAutoUpdat
 	async download(downloadUrl: string, version: string): Promise<void> {
 		this._state = { type: 'downloading', progress: 0 };
 
-		const tmpDir  = path.join(os.tmpdir(), `ni-update-${version}-${Date.now()}`);
-		const ext     = _ext(downloadUrl);
+		const tmpDir = path.join(os.tmpdir(), `ni-update-${version}-${Date.now()}`);
+		const ext = _ext(downloadUrl);
 		const zipPath = path.join(tmpDir, `NeuralInverse-${version}${ext}`);
 
 		fs.mkdirSync(tmpDir, { recursive: true });
@@ -178,7 +191,7 @@ export class VoidAutoUpdaterService extends Disposable implements IVoidAutoUpdat
 function _applyMac(newAppPath: string): void {
 	// newAppPath is the extracted NeuralInverse.app bundle
 	const installPath = '/Applications/NeuralInverse.app';
-	const scriptPath  = path.join(os.tmpdir(), 'ni-updater.sh');
+	const scriptPath = path.join(os.tmpdir(), 'ni-updater.sh');
 
 	const script = [
 		'#!/bin/bash',
@@ -196,11 +209,9 @@ function _applyMac(newAppPath: string): void {
 
 	fs.writeFileSync(scriptPath, script, { mode: 0o755 });
 
-	const { spawn } = require('child_process') as typeof import('child_process');
 	const child = spawn('/bin/bash', [scriptPath], { detached: true, stdio: 'ignore' });
 	child.unref();
 
-	const { app } = require('electron') as typeof import('electron');
 	app.quit();
 }
 
@@ -210,7 +221,7 @@ function _applyMac(newAppPath: string): void {
 function _applyLinux(newAppDir: string): void {
 	// newAppDir is the extracted app directory
 	const installPath = _linuxInstallPath();
-	const scriptPath  = path.join(os.tmpdir(), 'ni-updater.sh');
+	const scriptPath = path.join(os.tmpdir(), 'ni-updater.sh');
 
 	const script = [
 		'#!/bin/bash',
@@ -224,11 +235,9 @@ function _applyLinux(newAppDir: string): void {
 
 	fs.writeFileSync(scriptPath, script, { mode: 0o755 });
 
-	const { spawn } = require('child_process') as typeof import('child_process');
 	const child = spawn('/bin/bash', [scriptPath], { detached: true, stdio: 'ignore' });
 	child.unref();
 
-	const { app } = require('electron') as typeof import('electron');
 	app.quit();
 }
 
@@ -243,14 +252,12 @@ function _linuxInstallPath(): string {
 
 function _applyWin(installerPath: string): void {
 	// Run the setup .exe silently — it handles restart
-	const { spawn } = require('child_process') as typeof import('child_process');
 	const child = spawn(installerPath, ['/silent', '/mergetasks=!runcode'], {
 		detached: true,
 		stdio: 'ignore',
 	});
 	child.unref();
 
-	const { app } = require('electron') as typeof import('electron');
 	app.quit();
 }
 
@@ -297,7 +304,6 @@ function _findDir(root: string, name: string): string | undefined {
 
 function _exec(cmd: string): Promise<void> {
 	return new Promise((resolve, reject) => {
-		const { exec } = require('child_process') as typeof import('child_process');
 		exec(cmd, (err) => err ? reject(err) : resolve());
 	});
 }
@@ -305,10 +311,19 @@ function _exec(cmd: string): Promise<void> {
 
 // ─── Download helper ──────────────────────────────────────────────────────────
 
-function _download(url: string, dest: string, onProgress: (pct: number) => void): Promise<void> {
+/**
+ * Loads the node http(s) module for a URL. These are type-only imports at the top —
+ * eagerly requiring them measurably slows main-process startup — so the runtime
+ * module is pulled in only when a download or fetch actually happens.
+ */
+async function _clientFor(url: string): Promise<typeof https | typeof http> {
+	return url.startsWith('https') ? await import('https') : await import('http');
+}
+
+async function _download(url: string, dest: string, onProgress: (pct: number) => void): Promise<void> {
+	const client = await _clientFor(url);
 	return new Promise((resolve, reject) => {
-		const file   = fs.createWriteStream(dest);
-		const client = url.startsWith('https') ? https : http;
+		const file = fs.createWriteStream(dest);
 
 		client.get(url, (res) => {
 			if (res.statusCode === 301 || res.statusCode === 302) {
@@ -340,9 +355,9 @@ function _download(url: string, dest: string, onProgress: (pct: number) => void)
 
 // ─── Simple fetch (no node-fetch dep) ────────────────────────────────────────
 
-function _fetch(url: string): Promise<{ status: number; body: string | null }> {
+async function _fetch(url: string): Promise<{ status: number; body: string | null }> {
+	const client = await _clientFor(url);
 	return new Promise((resolve, reject) => {
-		const client = url.startsWith('https') ? https : http;
 		client.get(url, (res) => {
 			let data = '';
 			res.on('data', (c: string) => { data += c; });
@@ -353,6 +368,6 @@ function _fetch(url: string): Promise<{ status: number; body: string | null }> {
 
 function _ext(url: string): string {
 	if (url.endsWith('.tar.gz')) { return '.tar.gz'; }
-	if (url.endsWith('.exe'))   { return '.exe'; }
+	if (url.endsWith('.exe')) { return '.exe'; }
 	return '.zip';
 }

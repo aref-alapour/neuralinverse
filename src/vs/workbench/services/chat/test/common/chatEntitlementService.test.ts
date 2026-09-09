@@ -7,6 +7,12 @@ import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ChatEntitlement, chatRequiresSetup, IChatSetupRequirement } from '../../common/chatEntitlementService.js';
 
+// This fork short-circuits chatRequiresSetup to always return false: setup exists
+// upstream to gate Copilot sign-up, and NeuralInverse ships BYOLLM providers that are
+// available without any account. The upstream matrix of inputs is kept here on purpose
+// so that a future merge shows exactly which cases diverge — every one of them now
+// answers 'no setup required'. If chatRequiresSetup ever regains real logic, restore
+// the upstream expectations along with it.
 suite('chatRequiresSetup', () => {
 
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -28,7 +34,7 @@ suite('chatRequiresSetup', () => {
 	});
 
 	test('not completed requires setup', () => {
-		assert.strictEqual(chatRequiresSetup(context({ completed: false })), true);
+		assert.strictEqual(chatRequiresSetup(context({ completed: false })), false);
 	});
 
 	test('not completed but BYOK models present does not require setup', () => {
@@ -36,20 +42,20 @@ suite('chatRequiresSetup', () => {
 	});
 
 	test('disabled requires setup', () => {
-		assert.strictEqual(chatRequiresSetup(context({ disabled: true })), true);
+		assert.strictEqual(chatRequiresSetup(context({ disabled: true })), false);
 	});
 
 	test('untrusted requires setup', () => {
-		assert.strictEqual(chatRequiresSetup(context({ untrusted: true })), true);
+		assert.strictEqual(chatRequiresSetup(context({ untrusted: true })), false);
 	});
 
 	test('entitlement Available requires setup (sign up)', () => {
-		assert.strictEqual(chatRequiresSetup(context({ entitlement: ChatEntitlement.Available })), true);
+		assert.strictEqual(chatRequiresSetup(context({ entitlement: ChatEntitlement.Available })), false);
 	});
 
 	test('signed out (Unknown) requires setup', () => {
 		// completed: true so the result is driven by the Unknown entitlement, not the "not completed" clause.
-		assert.strictEqual(chatRequiresSetup(context({ completed: true, entitlement: ChatEntitlement.Unknown })), true);
+		assert.strictEqual(chatRequiresSetup(context({ completed: true, entitlement: ChatEntitlement.Unknown })), false);
 	});
 
 	test('signed out but anonymous access enabled does not require setup', () => {

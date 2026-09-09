@@ -29,6 +29,39 @@
 - **برآورد:** S < نیم روز / M = ۱-۳ روز / L > یک هفته (شامل پورت live-patch)
 - **وضعیت:** 🔴 شروع نشده / 🟡 در حال کار یا ناقص / ✅ انجام + تست‌شده
 
+### تعریف قطعی وضعیت (قاعده‌ی الزامی — بستن R1/N3)
+
+وضعیت **نظر نیست، تابع گیت‌های Definition of Done است**:
+
+| نماد | تعریف |
+|---|---|
+| 🔴 | G1 (پیاده‌سازی روی سورس) شروع نشده یا ناقص است |
+| 🟡 | G1+G2 سبز (کد نوشته و کامیت شده) ولی G3 (اجرای زنده) یا G4 (تست owner) باز است |
+| ✅ | تا G4 سبز — owner روی نسخه‌ی قابل‌اجرا دیده و تأیید کرده |
+
+**چهار شرط «انجام شده» (درس ممیزی ۲۰۲۶-۰۹-۰۸):** وجود فایل پیاده‌سازی به‌تنهایی
+هیچ‌چیز را ثابت نمی‌کند. برای هر ادعا هر چهار مورد لازم است:
+**فایل + ثبت (`registerSingleton`/contribution) + caller واقعی + سناریوی قابل‌مشاهده.**
+سه ممیزی مستقل نشان دادند چک‌کردن فقط مورد اول، هم کد مرده را «آماده» گزارش
+می‌کند و هم «grep پیدا نکرد» را به «وجود ندارد» ترجمه می‌کند.
+
+## ⚠️ بازنگری بنیادی ۲۰۲۶-۰۹-۰۸ — این جدول در برابر سایدبار Void نوشته شده بود
+
+جدول زیر فرض می‌کند سطح محصول ما **سایدبار Void** است. سه ممیزی مستقل نشان دادند
+این فرض دیگر درست نیست:
+
+1. **پایه‌ی ما VS Code ۱.۱۲۷ است** و استک چت بومی آن checkpoint فایلی، gauge مصرف
+   context، plan، مجوز یکپارچه، AGENTS.md/CLAUDE.md، skills، hooks، sub-agent،
+   todo و صف پیام را **از قبل و حرفه‌ای‌تر** دارد.
+2. **`voidModelProvider.ts` مدل‌های BYOLLM ما را به‌عنوان agent پیش‌فرض همان چت
+   بومی ثبت می‌کند** — پس آن قابلیت‌ها بالقوه با موتور خودمان کار می‌کنند، نه با
+   Copilot. سخت‌سازی این پل شد [A7](03-agent-parity/07-native-chat-bridge.md).
+3. برای بسیاری از ردیف‌های زیر، کار درست **«وصل‌کردن» است نه «ساختن»** — و برآوردها
+   باید متناسب کوچک شوند.
+
+**گزارش کامل با شواهد و داوری بین سه ممیزی:**
+[ممیزی تسک‌ها در برابر کد](05-quality/task-vs-code-audit-2026-09-08.md)
+
 ## نقشه‌ی Cursor Parity — کجا ایستاده‌ایم
 
 | قابلیت Cursor | وضعیت فعلی ما | تسک | اولویت |
@@ -36,22 +69,22 @@
 | Memories (خودکار + معنایی) | ⚠️ حافظه‌ی واژگانی، ثبت فقط پایان task | [M2](01-memory/02-vector-retrieval.md) + [M3](01-memory/03-auto-capture-consolidation-ui.md) | P0→P1 |
 | ادامه‌ی گفتگو / resume thread | ❌ حافظه در RAM می‌میرد | [M1](01-memory/01-conversation-persistence.md) | **P0** |
 | @Docs (ایندکس مستندات) | ❌ | [M4](01-memory/04-docs-knowledge-base.md) | P2 |
-| Context: نوار مصرف + شفافیت | ❌ (موتورش هست، UI ندارد) | [C2](02-context/02-context-gauge-ui.md) | **P0** |
+| Context: نوار مصرف + شفافیت | 🟡 ویجت بومی از موج ۲ تغذیه می‌شود؛ gauge سایدبار موج ۳ ساخته شد (تست owner باز) | [C2](02-context/02-context-gauge-ui.md) | **P0** |
 | @-mentions (@file/@symbol/@web) | ❌ (فقط stage انتخاب) | [C3](02-context/03-at-mentions.md) | P1 |
 | فایل‌های Pinned + Notepads | ❌ | [C4](02-context/04-pinned-context.md) | P1 |
 | درک Codebase (semantic retrieval) | ⚠️ موتور هست، نیمه‌وصل | [C1](02-context/01-wire-context-engine.md) + [C6](02-context/06-smart-auto-context.md) | P0→P1 |
 | Repo map هوشمند | ⚠️ درخت ساده | [C5](02-context/05-repo-map-upgrade.md) | P1 |
 | Compaction خودکار با UX | 🟡 موتور عالی، UX صفر | [C7](02-context/07-compaction-ux.md) | **P0** |
 | گفتگوی بی‌پایان بدون فراموشی (تا ۱۰M+) | ❌ خلاصه بازنویسی می‌شود، بایگانی غیرقابل‌بازیابی | [M5](01-memory/05-context-ledger.md) | **P0** |
-| Background Agents (تسک → PR) | ⚠️ git آماده، **LLM وصل نیست** | [A1](03-agent-parity/01-background-agents-loop.md) | **P0** |
-| Checkpoints (restore فایل) | ⚠️ فقط ایندکس پیام | [A3](03-agent-parity/03-file-checkpoints.md) | P1 |
-| سطح‌های auto-run / مجوز واحد | ⚠️ سه مدل پراکنده؛ executor بدون تأیید | [A4](03-agent-parity/04-unified-permissions.md) | P1 |
-| Plan mode | ❌ (فقط prompt-level) | [A5](03-agent-parity/05-plan-mode.md) | P2 |
-| Composer (planner/worker) | ⚠️ اجزا موجود، الگو نیست | [A6](03-agent-parity/06-multi-agent-composer.md) | P2 |
-| Rules (استاندارد صنعت) | ⚠️ فقط `.neuralinverserules` | [E1](04-ecosystem/01-agents-md-compat.md) | **P0** |
-| Skills / Hooks | ❌ | [E2](04-ecosystem/02-skills-and-hooks.md) | P2 |
+| Background Agents (تسک → PR) | 🔴 LLM وصل نیست **و سرویس ثبت نشده**؛ upstream پوسته‌ی کامل دارد | [A1](03-agent-parity/01-background-agents-loop.md) | **P0** |
+| Checkpoints (restore فایل) | ⭐ **دو پیاده‌سازی کامل داریم** (firmware + upstream)، هیچ‌کدام وصل نیست | [A3](03-agent-parity/03-file-checkpoints.md) | P1 |
+| سطح‌های auto-run / مجوز واحد | ⚠️ چهار مدل پراکنده؛ upstream مرجع آماده دارد | [A4](03-agent-parity/04-unified-permissions.md) | P1 |
+| Plan mode | 🟡 **تله بسته شد (۰۹-۰۸):** گارد در مرز `callTool` نوشتن/اجرای ۱۸ ابزار را در plan رد می‌کند؛ پورت live-patch، تست owner و قدم‌های بعدی A5 باز | [A5](03-agent-parity/05-plan-mode.md) | **P1** |
+| Composer (planner/worker) | ⚠️ sub-agent زنده، ولی ماژول composer ثبت نشده | [A6](03-agent-parity/06-multi-agent-composer.md) | P2 |
+| Rules (استاندارد صنعت) | 🟡 **موج ۳ (۰۹-۰۸):** سه مسیر وصل شد (AGENTS/CLAUDE/.neuralinverserules)؛ تست owner و تأیید precedence باز | [E1](04-ecosystem/01-agents-md-compat.md) | **P0** |
+| Skills / Hooks | ⭐ upstream هر دو را دارد (`.claude/skills` + hookCompatibility) | [E2](04-ecosystem/02-skills-and-hooks.md) | P2 |
 | اجرای CLI/CI (مثل `claude -p`) | ❌ | [E3](04-ecosystem/03-cli-headless.md) | P2 |
-| Usage / هزینه | ❌ هاردکد `$0.0000` | [Q1](05-quality/01-cost-usage-tracking.md) | **P0** |
+| Usage / هزینه | 🟡 `usage` روی desktop می‌رسد (۰۹-۰۸: هر دو مسیر chat + تست پاریتی)؛ تست owner روی نسخه‌ی نصبی باز | [Q1](05-quality/01-cost-usage-tracking.md) + [Q12](05-quality/12-desktop-usage-parity.md) | **P0** |
 | Tab (autocomplete) | ✅ داریم | — | — |
 | Inline edit (Ctrl+K) | ✅ داریم | — | — |
 | Apply / diff | ✅ Fast+Slow داریم | — | — |
@@ -64,13 +97,30 @@ compaction ای که از نظر الگوریتم جلوتر است.
 
 ## ترتیب اجرای پیشنهادی
 
-### دسته‌ی ۱ — برداشت سریع (همین هفته؛ همه S یا S/M)
-هدف: زودترین «حس Cursor» با کمترین ریسک.
-1. **E1** سازگاری AGENTS.md/CLAUDE.md — برد onboarding
-2. **C2** نمایشگر مصرف context
+### دسته‌ی ۰ — پایه‌ریزی (بازنویسی‌شده ۲۰۲۶-۰۹-۰۸؛ جایگزین دسته‌ی ۱ قدیم)
+
+> این پنج مورد قبل از هر feature جدید می‌آیند: دوتای اول کد نمی‌خواهند، و سه‌تای
+> بعدی ورودیِ درست را برای بقیه‌ی بک‌لاگ فراهم می‌کنند.
+
+1. **[Q9](05-quality/09-tls-verification-disabled.md)** — `NODE_TLS_REJECT_UNAUTHORIZED=0`
+   هنوز روی سطح User ست است. تنها P0 امنیتیِ باز، و کد نمی‌خواهد.
+2. **[Q13](05-quality/13-contribution-registration-gate.md)** — تصمیم درباره‌ی
+   contrib ثبت‌نشده. تا این بسته نشود، برآورد A1 و A6 بی‌معنی است.
+3. **[Q12](05-quality/12-desktop-usage-parity.md)** — `usage` روی desktop نمی‌رسد.
+   پیش‌نیاز عددِ درست در Q1 و C2 و M6.
+4. **[A7](03-agent-parity/07-native-chat-bridge.md)** — سخت‌سازی پل چت بومی.
+   بزرگ‌ترین اهرم: A3/A4/A5/C2/C7/E1/E2 را از «ساختن» به «وصل‌کردن» تبدیل می‌کند.
+5. **[A5](03-agent-parity/05-plan-mode.md) بند اول** — یا `getThreadPlanMode` را
+   enforce کن یا ابزارهایش را حذف کن. الان ادعای مهار می‌کند و مهار نمی‌کند.
+
+### دسته‌ی ۱ — برداشت سریع (بعد از دسته‌ی ۰؛ همه S یا S/M)
+هدف: زودترین «حس Cursor» با کمترین ریسک. **بعد از A7 هر پنج مورد کوچک‌تر می‌شوند.**
+1. **E1** سازگاری AGENTS.md/CLAUDE.md — upstream دارد؛ فقط اتصال
+2. **C2** نمایشگر مصرف context — ویجت upstream هست؛ فقط تغذیه
 3. **C7** UX دی compaction (`/compact` + کارت summary)
-4. **Q1** هزینه‌ی واقعی + داشبورد Usage
-5. **Q2** بهداشت کدبیس + ابزار `live-patch --verify`
+4. **Q1** هزینه‌ی واقعی + داشبورد Usage (بعد از Q12)
+5. **Q2** بهداشت کدبیس — ✅ بخش حذف‌ها (۰۹-۰۸: ۷ فایل `.bak` حذف؛ «`.js` مرده» در واقع
+   **شیمِ زنده‌ی** ۸ از ۹ باندل React بود و ماند)؛ پیشنهاد N5 منتظر تصمیم owner
 
 ### دسته‌ی ۲ — حافظه (قلب استراتژی؛ ادامه‌ی branch فعلی)
 > **ستون فقرات این دسته [M5](01-memory/05-context-ledger.md) است.** M1 (ماندگاری) در فاز ۰/۵
@@ -152,20 +202,32 @@ compaction ای که از نظر الگوریتم جلوتر است.
 | تسک | وضعیت | شاخه (branch) | یادداشت |
 |---|---|---|---|
 | M5 | 🟡 | `feat/context-ledger` | فازهای ۰-۳ و ۵ روی سورس کامل + تست standalone؛ پورت live-patch و تست owner مانده (بند ۱۳ تسک) |
+| **M7** | 🟡 | `feat/context-ledger` | **موج ۴ (۰۹-۰۹):** دو سیستم حافظه یکی شد (گزینه‌ی الف؛ ابزارها روی موتور M2 + مهاجرت غیرمخرب `.void-memory`) + ۵ تست؛ تست owner با بیلد نصبی مانده |
+| **A8** | 🟡 | `feat/context-ledger` | **موج ۴ (۰۹-۰۹):** هر دو شکاف پاریتی چت بومی بسته شد (حافظه‌ی hybrid با کوئری از پیام کاربر + اجرای ابزارهای recall) + تست پاریتی ۵لنگری در verify (۱۵۱ تست)؛ تست owner با بیلد نصبی مانده |
 | M1 | 🟡 | درون M5 | journal = persistence؛ کلید conversationId در فاز ۵ بسته شد؛ تست owner مانده |
-| M2 | 🟡 | درون `feat/context-ledger` | بازیابی hybrid + pin + سقف ۲۰۰۰ پیاده شد؛ تست owner مانده |
+| M2 | 🟡 | درون `feat/context-ledger` | **موج ۳ (۰۹-۰۸):** recall روی مسیر تزریق وصل شد (کوئری از task+working memory) + backfill + provider معتبر؛ تست owner مانده |
 | M3 / M4 | 🔴 | — | روی زیرساخت M5 در session بعدی |
-| **M6** | 🔴 | ادامه‌ی `feat/context-ledger` | شکاف‌های ممیزی ۲۰۲۶-۰۹-۰۵ — **قبل از تست زنده‌ی Ledger** |
-| **Q4** | 🔴 | — | یکپارچگی live-patch — **پیش‌نیاز هر پورت زنده‌ی بعدی** |
-| **Q5** | 🔴 | — | هارنس type-check و تست، بدون build کامل |
+| **M1 / M2 / M5** | ✅ | — | **تست owner سبز ۰۹-۰۹** روی بیلد نصبی `9a520bdfa81` |
+| **M7** | ✅ | `537d704b20d` | یکی‌شدن دو سیستم حافظه — تست owner سبز |
+| **A8** | ✅ | `39f204774d7` | دو شکاف پاریتی چت بومی + گیت پاریتی — تست owner سبز |
+| **A7** | 🔴 | — | **جدید ۰۹-۰۸** — سخت‌سازی پل چت بومی؛ پرلوریج‌ترین تسک بک‌لاگ |
+| **Q12** | 🟡 | `213acb1`, `a5ccefb` | usage روی desktop می‌رسد (هر دو مسیر chat + تست پاریتی در verify)؛ پورت live-patch + تست owner باز؛ ~۱۵ هشدار لینت سخت فایل باقی (Q11) |
+| **Q13** | 🟡 | `3e16228` | گیت reachability در verify.mjs (با هوک hygiene سبز)؛ ۲۵۹ فایل، ۶ یتیم مستند، ۰ غیرمنتظره؛ تصمیم voiceEventStream با owner |
+| **Q2** | 🟡 | `b43716a` | ۷ فایل `.bak` حذف + `*.bak*` ignore؛ شیم `backgroundAgentService.js` زنده درآمد و ماند؛ پیشنهاد N5 (گزینه A) منتظر تصمیم owner |
+| A3 | 🟡 | `feat/context-ledger` | **موج ۳ (۰۹-۰۸):** منبع حقیقت = سرویس firmware (برای رندرر بازنویسی شد)، checkpoint در مرز واحد `toolsService` برای هر دو مسیر؛ `agentRollbackService` حذف شد؛ فرمان Restore؛ پورت live-patch و تست owner باز |
+| A5 | 🟡 | `feffd9a`, `85335f0` | قدم اول بسته شد: enforce در مرز `callTool` (۱۸ ابزار نویسنده/اجرایی) + ۸ تست؛ پورت live-patch، تست owner و قدم‌های بعدی باز؛ ~۳۱ هشدار لینت سخت فایل باقی (Q11) |
+| Q1 | 🟡 | — | **اصلاح ۰۹-۰۸** — از 🔴؛ ادعای هاردکد `$0.0000` باطل شد |
+| G6 | 🔴 | — | **اصلاح ۰۹-۰۸** — از 🟡؛ مارکر به صف دیگری اشاره داشت |
+| **M6** | ✅ | `235aef5`, `2c34e79` | سخت‌سازی Ledger بسته شد (فایل تسک ✅)؛ تست زنده‌ی Ledger همچنان مانده (S3 در وضعیت ۲۰۲۶-۰۹-۰۶) |
+| **Q4** | ✅ | `8c6f1e8`, `875e01f`, `c6233c0` | یکپارچگی live-patch بسته شد؛ selftest هفت‌سناریویی + گیت parse اجباری سبز |
+| **Q5** | ✅ | `8c6f1e8`, `cf6412b` | هارنس verify/typecheck-slice/run-tests سبز؛ پوشش محدود به slice (نک. V1/V2 در وضعیت ۲۰۲۶-۰۹-۰۶) |
 
-> **هشدار وضعیت زنده (ممیزی ۲۰۲۶-۰۹-۰۵):** روی برنامه‌ی نصب‌شده فقط سه فیکس کوچک
-> agent اعمال شده (اختلاف bundle با نسخه‌ی pristine: ۳۴۸ بایت). ماژول
-> `globalThis.__niC` — پورت context pipeline از کامیت `2eb53a2` — **صفر مورد** در
-> bundle نصب‌شده دارد، یعنی هرگز ننشسته. علتش این است که `live-patch.py` وقتی الگویی
-> را پیدا نمی‌کند فقط `SKIP` چاپ می‌کند و باز هم `exit 0` می‌دهد. تا
-> [Q4](05-quality/04-live-patch-integrity.md) بسته نشود، هیچ «تست owner روی نسخه‌ی
-> نصبی» معتبر نیست.
+> **وضعیت زنده (به‌روز ۲۰۲۶-۰۹-۰۶):** هشدار ممیزی ۰۹-۰۵ منسوخ شد — Q4 بسته
+> شد و اکنون **۹۷ پچ + ۲ prepend** روی نصب اعمال و `--verify` سبز است
+> (۹۹ OK)، ازجمله فوتر پیام و ابزارها. ماندنی‌ها: Ledger هنوز پورت زنده ندارد
+> (S3)، پچ‌ها به نام‌های مینیفایِ همین بیلد وابسته‌اند و اولین آپدیت رسمی همه
+> را MISSING می‌کند (S1/W4)، و هیچ بیلد کامل از سورس وجود ندارد — رجیستر
+> کامل: [وضعیت پروژه ۲۰۲۶-۰۹-۰۶](05-quality/project-status-and-weaknesses-2026-09-06.md).
 
 ## Definition of Done (برای هر تسک)
 

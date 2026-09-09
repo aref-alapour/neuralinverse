@@ -28,15 +28,17 @@
 import { ILLMMessageService } from '../../../void/common/sendLLMMessageService.js';
 import { IVoidSettingsService } from '../../../void/common/voidSettingsService.js';
 import { ModelSelection } from '../../../void/common/voidSettingsTypes.js';
-import { LLMChatMessage } from '../../../void/common/sendLLMMessageTypes.js';
+import { LLMChatMessage, GeminiLLMChatMessage } from '../../../void/common/sendLLMMessageTypes.js';
 import { getModelCapabilities } from '../../../void/common/modelCapabilities.js';
-import { CompactableMessage, ConversationCompactor, capToolResultForHistory, createInactivityWatchdog, renderConversationSummaryMessage } from '../../../void/browser/conversationCompactor.js';
+import { CompactableMessage, ConversationCompactor, capToolResultForHistory, createInactivityWatchdog, isRetryableLlmError, renderConversationSummaryMessage } from '../../../void/browser/conversationCompactor.js';
 import { IContextLedgerService } from '../../../void/browser/contextLedgerService.js';
 import { EpisodeSummarizer } from '../../../void/browser/episodeSummarizer.js';
 import { ILedgerAppendInput, ILedgerEntry } from '../../../void/common/ledgerTypes.js';
 import { DEFAULT_LEDGER_POLICY } from '../../../void/common/ledgerPolicy.js';
 import { buildWorkingBrief } from '../../../void/common/workingBriefBuilder.js';
 import { resolveCloseBoundary, noteBoundaryMissed, resetBoundaryMissTelemetry } from '../../../void/common/ledgerBoundary.js';
+import { formatWorkspaceRuleFiles, WORKSPACE_RULE_FILENAMES, IWorkspaceRuleFile } from '../../../void/common/workspaceRuleFiles.js';
+import { URI } from '../../../../../base/common/uri.js';
 import { IAgentDefinition, IWorkflowStep, IStepRun, IToolCallRecord, IToolExecutionContext, IStepToolCacheConfig } from '../../common/workflowTypes.js';
 import { ScopedToolRegistry } from '../tools/toolRegistry.js';
 import { parseToolCalls, stripToolCallBlocks } from './toolCallParser.js';
@@ -48,6 +50,9 @@ const DEFAULT_MAX_ITERATIONS = 20;
 
 /** Retries (on top of the first attempt) when the LLM returns an empty response */
 const MAX_EMPTY_RESPONSE_RETRIES = 2;
+
+/** Delay between transient-error retries — matches the chat loop's RETRY_DELAY. */
+const LLM_RETRY_DELAY_MS = 2500;
 
 /** A provider stream that emits no chunks for this long is treated as dead and aborted. */
 const LLM_STALL_MS = 180_000; // 3 minutes
@@ -79,8 +84,8 @@ export class AgentExecutor {
 	/** Lazy — needs the constructor-injected llmService */
 	private _compactorInstance: ConversationCompactor | undefined;
 	private _compactor(): ConversationCompactor {
-		if (!this._compactorInstance) this._compactorInstance = new ConversationCompactor(this.llmService)
-		return this._compactorInstance
+		if (!this._compactorInstance) { this._compactorInstance = new ConversationCompactor(this.llmService); }
+		return this._compactorInstance;
 	}
 
 	// ─── Context Ledger (task M5, phase 5) ───────────────────────────────
@@ -104,7 +109,7 @@ export class AgentExecutor {
 		// decorator injects it. Without a ledger service the ledger path stays
 		// off and the legacy compactor keeps running, exactly as before.
 		@IContextLedgerService private readonly contextLedgerService?: IContextLedgerService,
-	) {}
+	) { }
 
 	/** Flag ON and a ledger service is wired in; otherwise the legacy compactor owns the path. */
 	private _ledgerEnabled(): boolean {
@@ -112,7 +117,7 @@ export class AgentExecutor {
 	}
 
 	private _warnLedgerOnce(): void {
-		if (this._ledgerWarned) return;
+		if (this._ledgerWarned) { return; }
 		this._ledgerWarned = true;
 		console.warn('[AgentExecutor] context ledger degraded — using legacy compaction; the step continues unaffected');
 	}
@@ -120,7 +125,7 @@ export class AgentExecutor {
 	/** Fire-and-forget journal append; a ledger failure warns once and never blocks the loop. */
 	private _journal(threadId: string, input: ILedgerAppendInput): void {
 		const ledger = this.contextLedgerService;
-		if (!ledger) return;
+		if (!ledger) { return; }
 		ledger.append(threadId, input).catch(() => this._warnLedgerOnce());
 	}
 
@@ -181,7 +186,12 @@ export class AgentExecutor {
 			}
 		}
 
-		const systemPrompt = this._buildSystemPrompt(agent, toolSchemas, priorOutputs, workspaceContext);
+		// Workspace rule files (task E1): AGENTS.md / CLAUDE.md /
+		// .neuralinverserules from the step's workspace root — same names as
+		// the sidebar and native-chat readers (workspaceRuleFiles.ts).
+		const workspaceRules = await this._readWorkspaceRuleFiles(ctx);
+
+		const systemPrompt = this._buildSystemPrompt(agent, toolSchemas, priorOutputs, workspaceContext, workspaceRules);
 		history.push({ role: 'system', content: systemPrompt });
 		// Journal the system prompt once per run (role 'system').
 		if (this._ledgerEnabled()) {
@@ -238,15 +248,27 @@ export class AgentExecutor {
 			try {
 				// An empty response is usually transient (proxy hiccup, dropped
 				// stream) — retry instead of finishing the step with no output,
-				// which the UI renders as a bare "(done)".
+				// which the UI renders as a bare "(done)". Transient connection
+				// errors (local endpoints dropping streams under heavy load) get
+				// the same treatment: one blip must not kill a long agent run.
 				for (let attempt = 0; attempt <= MAX_EMPTY_RESPONSE_RETRIES; attempt++) {
-					const t = await this._callLLM(history);
-					if (t && t.trim()) { responseText = t; break; }
-					ctx.log(`[${step.id}] empty LLM response (attempt ${attempt + 1}/${MAX_EMPTY_RESPONSE_RETRIES + 1})`);
+					try {
+						const t = await this._callLLM(history);
+						if (t && t.trim()) { responseText = t; break; }
+						ctx.log(`[${step.id}] empty LLM response (attempt ${attempt + 1}/${MAX_EMPTY_RESPONSE_RETRIES + 1})`);
+					} catch (e) {
+						const msg: string = e instanceof Error ? e.message : '';
+						if (attempt < MAX_EMPTY_RESPONSE_RETRIES && isRetryableLlmError(msg)) {
+							ctx.log(`[${step.id}] transient LLM error, retrying (attempt ${attempt + 1}/${MAX_EMPTY_RESPONSE_RETRIES + 1}): ${msg}`);
+							await new Promise(r => setTimeout(r, LLM_RETRY_DELAY_MS));
+							continue;
+						}
+						throw e;
+					}
 				}
-			} catch (e: any) {
+			} catch (e) {
 				stepRun.status = 'failed';
-				stepRun.error = `LLM error: ${e.message}`;
+				stepRun.error = `LLM error: ${e instanceof Error ? e.message : String(e)}`;
 				stepRun.endedAt = Date.now();
 				return;
 			}
@@ -303,7 +325,7 @@ export class AgentExecutor {
 			} else {
 				// Sequential execution (default)
 				for (let i = 0; i < toolCalls.length; i++) {
-					if (cancellation.cancelled) break;
+					if (cancellation.cancelled) { break; }
 					toolResultParts[i] = await this._executeSingleTool(toolCalls[i], stepRun, step, ctx);
 				}
 			}
@@ -321,7 +343,7 @@ export class AgentExecutor {
 				const records = stepRun.toolCalls.slice(-toolCalls.length);
 				for (let i = 0; i < toolCalls.length; i++) {
 					const part = toolResultParts[i];
-					if (!part) continue; // cancelled before this call ran
+					if (!part) { continue; } // cancelled before this call ran
 					const record = records[i];
 					this._journal(ledgerThreadId, {
 						role: 'tool',
@@ -439,13 +461,13 @@ export class AgentExecutor {
 		};
 
 		while (idx < calls.length || pending.size > 0) {
-			if (cancellation.cancelled) break;
+			if (cancellation.cancelled) { break; }
 
 			while (pending.size < maxConcurrent && idx < calls.length) {
 				dispatch(idx++);
 			}
 
-			if (pending.size > 0) await Promise.race(pending);
+			if (pending.size > 0) { await Promise.race(pending); }
 		}
 	}
 
@@ -478,7 +500,11 @@ export class AgentExecutor {
 			if (providerName === 'gemini') {
 				requestMessages = requestMessages.map((m): LLMChatMessage => {
 					const role = (m as { role: string }).role;
-					return { role: role === 'assistant' ? 'model' as const : 'user' as const, parts: [{ text: _extractMessageText(m) }] } as LLMChatMessage;
+					const geminiMsg: GeminiLLMChatMessage = {
+						role: role === 'assistant' ? 'model' : 'user',
+						parts: [{ text: _extractMessageText(m) }],
+					};
+					return geminiMsg;
 				});
 			}
 
@@ -488,7 +514,7 @@ export class AgentExecutor {
 			// connection can't hang the step forever.
 			const watchdog = createInactivityWatchdog(LLM_STALL_MS, () => {
 				stalled = true;
-				if (cancelToken) this.llmService.abort(cancelToken);
+				if (cancelToken) { this.llmService.abort(cancelToken); }
 			});
 
 			cancelToken = this.llmService.sendLLMMessage({
@@ -519,7 +545,7 @@ export class AgentExecutor {
 			});
 
 			// sendLLMMessage already invoked onError synchronously when returning null
-			if (!cancelToken) watchdog.dispose();
+			if (!cancelToken) { watchdog.dispose(); }
 		});
 	}
 
@@ -547,7 +573,7 @@ export class AgentExecutor {
 		}
 
 		const modelSelection = this._modelSelection;
-		if (!modelSelection || history.length < 8) return;
+		if (!modelSelection || history.length < 8) { return; }
 
 		let contextWindow: number | undefined;
 		try {
@@ -556,7 +582,7 @@ export class AgentExecutor {
 		} catch {
 			return;
 		}
-		if (!contextWindow) return;
+		if (!contextWindow) { return; }
 
 		// history[0] is the system prompt — never compact it.
 		const systemMessage = history[0];
@@ -577,7 +603,7 @@ export class AgentExecutor {
 		} catch {
 			return;
 		}
-		if (!result.summary || result.keepFromIdx <= 0) return;
+		if (!result.summary || result.keepFromIdx <= 0) { return; }
 
 		ctx.log(`[${step.id}] compacting conversation: ~${result.tokensBefore} → ~${result.tokensAfter} est. tokens (llm summary: ${result.usedLLM})`);
 		const kept = history.slice(1 + result.keepFromIdx);
@@ -600,23 +626,23 @@ export class AgentExecutor {
 	private async _compactHistoryViaLedger(history: LLMChatMessage[], ctx: IToolExecutionContext, step: IWorkflowStep, agent: IAgentDefinition): Promise<void> {
 		const ledger = this.contextLedgerService;
 		const modelSelection = this._modelSelection;
-		if (!ledger || !modelSelection) return;
+		if (!ledger || !modelSelection) { return; }
 		const threadId = 'exec:' + agent.id;
 
 		// 1. journal stats drive the boundary decision, not the local array —
 		//    the journal accumulates across every run of this agent.
 		const stats = await ledger.stats(threadId);
-		if (!stats || stats.entryCount === 0) return;
+		if (!stats || stats.entryCount === 0) { return; }
 		const episodes = await ledger.listEpisodes(threadId);
 		// the smallest tail window answers decideBoundary's tail-size check;
 		// resolveCloseBoundary grows the window itself when a boundary is due
 		const tailProbe = await ledger.readTail(threadId, DEFAULT_LEDGER_POLICY.tailMinMessages + 4);
-		if (tailProbe.length === 0) return;
+		if (tailProbe.length === 0) { return; }
 		// 2. no idle signal in the executor (it compacts mid-run, never idle);
 		// there is no force/overflow signal to honor today either — a future
 		// context-overflow recovery would pass { force: true } here.
 		const decision = EpisodeSummarizer.decideBoundary(stats, tailProbe.length, 0, DEFAULT_LEDGER_POLICY);
-		if (!decision || !decision.close) return;
+		if (!decision || !decision.close) { return; }
 
 		const fromSeq = episodes.reduce((m, ep) => Math.max(m, ep.range.toSeq), 0) + 1;
 		// shared growing-window boundary search — a tool-heavy turn no longer
@@ -672,16 +698,35 @@ export class AgentExecutor {
 
 	// ─── System Prompt ────────────────────────────────────────────────────────
 
+	private async _readWorkspaceRuleFiles(ctx: IToolExecutionContext): Promise<string> {
+		const ruleFiles: IWorkspaceRuleFile[] = [];
+		for (const fileName of WORKSPACE_RULE_FILENAMES) {
+			try {
+				const { value } = await ctx.fileService.readFile(URI.joinPath(ctx.workspaceUri, fileName));
+				ruleFiles.push({ fileName, content: value.toString() });
+			} catch {
+				// Missing file — skip
+			}
+		}
+		return formatWorkspaceRuleFiles(ruleFiles);
+	}
+
 	private _buildSystemPrompt(
 		agent: IAgentDefinition,
 		toolSchemas: object[],
 		priorOutputs: IPriorStepOutput[],
 		workspaceContext?: string,
+		workspaceRules?: string,
 	): string {
 		const parts: string[] = [];
 
 		// Agent's own instructions
 		parts.push(agent.systemInstructions.trim());
+
+		// Workspace rule files (AGENTS.md / CLAUDE.md / .neuralinverserules)
+		if (workspaceRules && workspaceRules.length > 0) {
+			parts.push(`\n## Workspace Rules\n\nThe following rules come from the repository's instruction files. Follow them alongside these instructions.\n\n${workspaceRules}`);
+		}
 
 		// Pre-packed workspace context (from Context Engine)
 		if (workspaceContext && workspaceContext.length > 0) {
@@ -715,21 +760,20 @@ export class AgentExecutor {
  */
 function _extractMessageText(msg: import('../../../void/common/sendLLMMessageTypes.js').LLMChatMessage): string {
 	// Gemini messages use `parts` instead of `content`
-	if ('parts' in msg) {
-		return msg.parts
-			.map(p => ('text' in p ? p.text : ''))
+	const geminiMsg = msg as GeminiLLMChatMessage;
+	if (geminiMsg.parts !== undefined) {
+		return geminiMsg.parts
+			.map(p => (typeof (p as { text?: string }).text === 'string' ? (p as { text: string }).text : ''))
 			.join('');
 	}
 	// Anthropic / OpenAI messages have `content`
-	if ('content' in msg) {
-		const content = (msg as { content: unknown }).content;
-		if (typeof content === 'string') return content;
-		if (Array.isArray(content)) {
-			return content.map(c => {
-				if (typeof c === 'object' && c !== null && 'text' in c) return (c as { text: string }).text;
-				return '';
-			}).join('');
-		}
+	const content = (msg as { content?: unknown }).content;
+	if (typeof content === 'string') { return content; }
+	if (Array.isArray(content)) {
+		return content.map(c => {
+			if (typeof c === 'object' && c !== null && typeof (c as { text?: string }).text === 'string') { return (c as { text: string }).text; }
+			return '';
+		}).join('');
 	}
 	return '';
 }
@@ -743,8 +787,8 @@ function _extractMessageText(msg: import('../../../void/common/sendLLMMessageTyp
  * undefined — the system prompt is always history[0], never mid-array.
  */
 function _ledgerEntryToChatMessage(entry: ILedgerEntry): LLMChatMessage | undefined {
-	if (entry.role === 'assistant') return { role: 'assistant', content: entry.content };
-	if (entry.role === 'user') return { role: 'user', content: entry.content };
-	if (entry.role === 'tool') return { role: 'user', content: capToolResultForHistory(entry.content) };
+	if (entry.role === 'assistant') { return { role: 'assistant', content: entry.content }; }
+	if (entry.role === 'user') { return { role: 'user', content: entry.content }; }
+	if (entry.role === 'tool') { return { role: 'user', content: capToolResultForHistory(entry.content) }; }
 	return undefined;
 }

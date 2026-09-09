@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Event } from '../../../base/common/event.js';
+import * as semver from '../../../base/common/semver/semver.js';
 import { upcast } from '../../../base/common/types.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 
@@ -13,6 +14,24 @@ export interface IUpdate {
 	timestamp?: number;
 	url?: string;
 	sha256hash?: string;
+}
+
+/**
+ * Whether an update feed's product version is strictly newer than the installed one.
+ *
+ * Feeds that ignore the version or commit we ask about answer with their latest release
+ * regardless, so an update that is not strictly newer must be refused: accepting it makes
+ * the client download and install an older build over itself, forever. Versions that
+ * cannot be parsed as semver are never treated as newer.
+ */
+export function isNewerProductVersion(candidate: string | undefined, installed: string | undefined): boolean {
+	const coerce = (v: string | undefined): string | null => v ? (semver.valid(v) ?? semver.valid(semver.coerce(v))) : null;
+	const a = coerce(candidate);
+	const b = coerce(installed);
+	if (!a || !b) {
+		return false;
+	}
+	return semver.gt(a, b);
 }
 
 /**

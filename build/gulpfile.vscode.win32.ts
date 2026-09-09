@@ -111,8 +111,19 @@ function buildWin32Setup(arch: string, target: string): task.CallbackTask {
 			Quality: quality
 		};
 
-		if (quality === 'stable' || quality === 'insider') {
-			definitions['AppxPackage'] = `${quality === 'stable' ? 'code' : 'code_insider'}_${arch}.appx`;
+		// The Explorer context-menu integration ships as an .appx built by a separate
+		// MSIX packaging step that only runs in CI. Declaring it when the artifact is
+		// absent makes InnoSetup fail outright ("Source file ... does not exist"), which
+		// blocks every local installer build. Ship it when it was built, skip it when it
+		// was not — the editor installs and runs either way, it just does not add the
+		// "Open with" shell entry.
+		const appxFileName = `${quality === 'stable' ? 'code' : 'code_insider'}_${arch}.appx`;
+		const appxBuilt = fs.existsSync(path.join(sourcePath, 'appx', appxFileName));
+		if (!appxBuilt && (quality === 'stable' || quality === 'insider')) {
+			console.warn(`[${quality}-setup] appx/${appxFileName} not found — building the installer without the Windows Explorer context-menu integration. Release builds must run the MSIX packaging step first.`);
+		}
+		if (appxBuilt && (quality === 'stable' || quality === 'insider')) {
+			definitions['AppxPackage'] = appxFileName;
 			definitions['AppxPackageDll'] = `${quality === 'stable' ? 'code' : 'code_insider'}_explorer_command_${arch}.dll`;
 			definitions['AppxPackageName'] = `${product.win32AppUserModelId}`;
 			const ctxMenu = (product as { win32ContextMenu?: Record<string, { clsid: string }> }).win32ContextMenu;

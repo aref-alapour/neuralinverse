@@ -23,6 +23,36 @@ const copyrightHeaderLines = [
 	' *--------------------------------------------------------------------------------------------*/',
 ];
 
+// Files authored by this fork carry their own copyright and the Apache-2.0 licence
+// instead of the upstream Microsoft/MIT header. A header is still mandatory; only the
+// expected text differs. The company name and rule width are matched loosely because
+// the fork currently ships three spellings of its own header — normalising those is
+// tracked separately, and should replace this pattern with exact lines once done.
+const forkCopyrightHeaderPatterns = [
+	/^\/\*-{20,}$/,
+	/^ \*\s+Copyright .*Neural\s?Inverse.*All rights reserved\.$/,
+	/^ \*\s+\S.*$/,
+	/^ \*-{20,}\*\/$/,
+];
+
+// Ported contribs (currently powerMode, from opencode) keep the upstream copyright
+// notice above our own, because that is what the source licence requires of a
+// derivative. A header is still mandatory here — only its shape differs. Do not
+// "fix" one of these files by replacing the notice with the fork header: that drops
+// an attribution the licence obliges us to carry. See the matching block in
+// eslint.config.js.
+const derivedCopyrightHeaderPatterns = [
+	/^\/\*-{20,}$/,
+	/^ \*\s+Original: .+$/,
+	/^ \*\s+Modified: .+$/,
+	/^ \*-{20,}\*\/$/,
+];
+
+function hasForkCopyrightHeader(lines: string[]): boolean {
+	const matches = (patterns: RegExp[]) => patterns.every((pattern, i) => pattern.test(lines[i] ?? ''));
+	return matches(forkCopyrightHeaderPatterns) || matches(derivedCopyrightHeaderPatterns);
+}
+
 interface VinylFileWithLines extends VinylFile {
 	__lines: string[];
 }
@@ -159,12 +189,11 @@ export function hygiene(some: NodeJS.ReadWriteStream | string[] | undefined, run
 	const copyrights = es.through(function (file: VinylFileWithLines) {
 		const lines = file.__lines;
 
-		for (let i = 0; i < copyrightHeaderLines.length; i++) {
-			if (lines[i] !== copyrightHeaderLines[i]) {
-				console.error(file.relative + ': Missing or bad copyright statement');
-				errorCount++;
-				break;
-			}
+		const hasUpstreamHeader = copyrightHeaderLines.every((headerLine, i) => lines[i] === headerLine);
+
+		if (!hasUpstreamHeader && !hasForkCopyrightHeader(lines)) {
+			console.error(file.relative + ': Missing or bad copyright statement');
+			errorCount++;
 		}
 
 		this.emit('data', file);
